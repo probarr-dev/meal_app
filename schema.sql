@@ -105,6 +105,18 @@ CREATE TABLE IF NOT EXISTS shop_tick (
   PRIMARY KEY (week_id, item)
 );
 
+-- Cupboard check, before the trolley exists. Deliberately the same shape as
+-- shop_tick but a separate table: "I already own this" and "I just bought
+-- this" are different facts about an item, and conflating them made a
+-- pantry-checked item look like it was sitting in the trolley before anyone
+-- had left the house.
+CREATE TABLE IF NOT EXISTS pantry_tick (
+  week_id INTEGER NOT NULL REFERENCES week(id) ON DELETE CASCADE,
+  item    TEXT NOT NULL,
+  checked INTEGER NOT NULL,
+  PRIMARY KEY (week_id, item)
+);
+
 -- Family picks: who wants which meal next week.
 CREATE TABLE IF NOT EXISTS meal_request (
   week_id   INTEGER NOT NULL REFERENCES week(id) ON DELETE CASCADE,

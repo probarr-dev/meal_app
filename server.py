@@ -105,6 +105,10 @@ def migrate(conn):
         # the household-wide setting (config: meals_target_default) but can
         # be bumped per week (e.g. more meals in a school holiday week).
         ("week", "meals_target", "INTEGER"),
+        # 'pantry' (default) = the cupboard-check phase, full list visible,
+        # nothing hidden. 'shopping' = the trolley phase, entered by an
+        # explicit tap once someone's actually heading out.
+        ("week", "shopping_phase", "TEXT DEFAULT 'pantry'"),
         # How many of an extra to get this particular week — "2 juice"
         # instead of the household default of 1 — without changing what
         # future weeks default to.
@@ -626,11 +630,14 @@ def build_shopping(conn, week_id, store_id=None):
 
     checked = {t["item"]: t["checked"]
                for t in rows(conn.execute("SELECT * FROM shop_tick WHERE week_id=?", (week_id,)))}
+    pantry_checked = {t["item"]: t["checked"]
+               for t in rows(conn.execute("SELECT * FROM pantry_tick WHERE week_id=?", (week_id,)))}
 
     by_aisle = {}
     for key, t in totals.items():
         t = {**t, "tags": sorted(t["tags"]), "key": key,
              "qty": fmt_qty(t["amount"], t["unit"]), "checked": bool(checked.get(key, 0)),
+             "pantryChecked": bool(pantry_checked.get(key, 0)),
              "meals": [{"id": mid, "name": name} for mid, name in sorted(t["meals"].items(), key=lambda x: x[1])]}
         by_aisle.setdefault(t["aisle"], []).append(t)
 
@@ -859,7 +866,10 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/shopping":
             wid = int(q["id"][0])
             sid = q.get("store_id", [""])[0]
-            return self.send_json({"groups": build_shopping(conn, wid, int(sid) if sid else None)})
+            phase = (conn.execute("SELECT shopping_phase FROM week WHERE id=?", (wid,)).fetchone()
+                     or {"shopping_phase": "pantry"})["shopping_phase"]
+            return self.send_json({"groups": build_shopping(conn, wid, int(sid) if sid else None),
+                                   "phase": phase})
 
         if path == "/api/poll":
             # The new flat weekly poll — one like per person per meal, no
@@ -1097,6 +1107,25 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("""INSERT INTO shop_tick(week_id,item,checked) VALUES (?,?,?)
                             ON CONFLICT(week_id,item) DO UPDATE SET checked=excluded.checked""",
                          (b["week_id"], b["item"], int(b["checked"])))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/pantry-tick":
+            conn.execute("""INSERT INTO pantry_tick(week_id,item,checked) VALUES (?,?,?)
+                            ON CONFLICT(week_id,item) DO UPDATE SET checked=excluded.checked""",
+                         (b["week_id"], b["item"], int(b["checked"])))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/week/shopping-phase":
+            # Deliberately no admin/parent gate — this only changes which view
+            # you're looking at, not any data, so anyone heading out the door
+            # can flip it. Reversible: switching back to 'pantry' loses
+            # nothing, the pantry_tick marks are untouched either direction.
+            phase = b.get("phase")
+            if phase not in ("pantry", "shopping"):
+                return self.send_json({"error": "Bad phase."}, 400)
+            conn.execute("UPDATE week SET shopping_phase=? WHERE id=?", (phase, b["week_id"]))
             conn.commit()
             return self.send_json({"ok": True})
 
@@ -1726,6 +1755,22 @@ class Handler(SimpleHTTPRequestHandler):
             if not is_admin(conn, b.get("admin_id")):
                 return self.send_json({"error": "Admins only."}, 403)
             conn.execute("UPDATE person SET pin_hash=NULL WHERE id=?", (b["id"],))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/person/reset-votes":
+            # A quick undo for the real risk of shared PINs: a sibling logs
+            # in as someone else and votes spitefully to wind them up, or
+            # worse, vetoes something out of pure mischief (a veto blocks the
+            # whole household, not just that one person's own picks). Clears
+            # both, for the currently-open vote week only — not a general
+            # history editor, just a fast "put it back how it was."
+            if not is_parent(conn, b.get("admin_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            conn.execute("DELETE FROM meal_vote WHERE week_id=? AND person_id=?",
+                         (b["week_id"], b["id"]))
+            conn.execute("DELETE FROM veto WHERE week_id=? AND person_id=?",
+                         (b["week_id"], b["id"]))
             conn.commit()
             return self.send_json({"ok": True})
 
