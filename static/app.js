@@ -1133,12 +1133,63 @@ async function viewShopping() {
   if (!S.storeId || !S.stores.some((s) => s.id === S.storeId)) {
     S.storeId = +(localStorage.getItem("mealplan-store") || 0) || S.stores[0]?.id || null;
   }
-  const [{ groups }, { extras, requests }] = await Promise.all([
+  const [{ groups: rawGroups, phase }, { extras, requests }] = await Promise.all([
     api.get(`/api/shopping?id=${S.weekId}${S.storeId ? `&store_id=${S.storeId}` : ""}`),
     api.get(`/api/extras?week_id=${S.weekId}`),
   ]);
   if (!S.meals.length) S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
   const parent = isParent();
+
+  // The cupboard-check phase is deliberately its own small screen, not a mode
+  // bolted onto the full shopping page — a focused "what have we already
+  // got" pass with nothing else competing for attention. Nothing here is
+  // ever hidden or moved: that's the whole point, it's what the trolley
+  // split doesn't give you. Stays open until someone taps "Heading out" —
+  // no auto-advance, no timeout, revisit it as many times as you like.
+  if (phase === "pantry") {
+    const groups = rawGroups;
+    const hue = (name) => {
+      let h = 0;
+      for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+      return h;
+    };
+    document.getElementById("view").innerHTML = `
+      <header class="block-head">
+        <h1>Shopping List</h1>
+        ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
+      ${cycleStripHTML("shop")}
+      <div class="notice small good no-print">
+        🧺 <strong>Check the cupboards</strong> — mark off what you've already got.
+        Come back to this any time before you go.
+        <button id="headingOutBtn" class="ghost" style="margin-left:6px">Heading to the shop →</button>
+      </div>
+      <div class="card">
+        ${groups.map((g) => `
+          <div class="aisle" style="--dot:hsl(${hue(g.aisle)} 52% 58%)">
+            <h3><span class="aisle-dot"></span>${esc(g.aisle)}</h3>
+            <div class="aisle-items">${g.items.map((i) => `
+              <label class="row shop-row" data-key="${esc(i.key)}">
+                <input type="checkbox" class="pantryCb" data-item="${esc(i.key)}" ${i.pantryChecked ? "checked" : ""}>
+                <span class="qty">${esc(i.qty)}</span>
+                <span class="shop-item"><span class="shop-name">${esc(i.item)}</span></span>
+              </label>`).join("")}</div>
+          </div>`).join("")}
+      </div>`;
+    document.querySelectorAll(".pantryCb").forEach((cb) => (cb.onchange = busy(cb, async () => {
+      await api.post("/api/pantry-tick", { week_id: S.weekId, item: cb.dataset.item, checked: cb.checked ? 1 : 0 });
+    })));
+    const headingOut = document.getElementById("headingOutBtn");
+    if (headingOut) headingOut.onclick = busy(headingOut, async () => {
+      await api.post("/api/week/shopping-phase", { week_id: S.weekId, phase: "shopping" });
+      viewShopping();
+    });
+    return;
+  }
+  // Settled in the cupboard check — not needed, shouldn't clutter the
+  // in-store list. Filtered here so shopping-phase's remaining/trolley split
+  // below never has to know pantry-check exists at all.
+  const groups = rawGroups.map((g) => ({ ...g, items: g.items.filter((i) => !i.pantryChecked) }))
+                 .filter((g) => g.items.length);
 
   // Whole-row tap target, and a name that doubles as content — kept out of the
   // template literal below since both the aisle list and the trolley list need
@@ -1205,6 +1256,8 @@ async function viewShopping() {
         <button onclick="window.print()" aria-label="Print list" title="Print list"><span aria-hidden="true">🖨️</span><span class="btn-label">Print</span></button>
       </div></header>
     ${cycleStripHTML("shop")}
+
+    <button id="backToPantryBtn" class="link-toggle no-print" style="margin-bottom:8px">← Back to cupboard check</button>
 
     ${parent && S.weekId === S.thisWeekId && S.shopDone ? advanceWeekHTML() : ""}
 
@@ -1367,6 +1420,12 @@ async function viewShopping() {
   })));
   const shoppingText = () => groups.map((g) =>
     g.aisle.toUpperCase() + "\n" + g.items.map((i) => `  ${i.qty}  ${i.item}`).join("\n")).join("\n\n");
+
+  const backToPantry = document.getElementById("backToPantryBtn");
+  if (backToPantry) backToPantry.onclick = busy(backToPantry, async () => {
+    await api.post("/api/week/shopping-phase", { week_id: S.weekId, phase: "pantry" });
+    viewShopping();
+  });
 
   const copyBtn = document.getElementById("copyBtn");
   copyBtn.onclick = busy(copyBtn, async () => {
@@ -2155,7 +2214,8 @@ async function viewSettings() {
               <option value="child"  ${x.role === "child" ? "selected" : ""}>Child</option>
             </select>
             ${isParent() ? `<button class="voteLinkBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Share a link that logs straight in as ${esc(x.name)}, no PIN">🔗 Vote link</button>
-              <button class="voteLinkRegen ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Kill the old link and make a new one">♻</button>` : ""}
+              <button class="voteLinkRegen ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Kill the old link and make a new one">♻</button>
+              <button class="resetVotesBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Clear ${esc(x.name)}'s likes and veto for this week">↺ Reset this week's votes</button>` : ""}
             ${isAdmin() ? `<button class="adminToggle" data-id="${x.id}" data-on="${x.is_admin ? 1 : 0}">${x.is_admin ? "Remove admin" : "Make admin"}</button>` : ""}
             ${isAdmin() ? `<button class="delPerson" data-id="${x.id}" aria-label="Remove ${esc(x.name)}">✕ Delete</button>` : ""}
           </div>
@@ -2266,6 +2326,14 @@ async function viewSettings() {
     const r = await api.post("/api/person/link/regenerate", { id: +b.dataset.id, admin_id: S.meId });
     if (r.error) return toast(r.error, "bad");
     toast(`Done — tap 🔗 Vote link to get ${b.dataset.name}'s new one.`, "good");
+  })));
+  document.querySelectorAll(".resetVotesBtn").forEach((b) => (b.onclick = busy(b, async () => {
+    if (!(await confirmDialog(
+        `Clears ${b.dataset.name}'s likes and any veto for this week, so they can vote again from scratch. Use this if someone's voted as them by mistake — or on purpose.`,
+        { title: `Reset ${b.dataset.name}'s votes?`, danger: true, okLabel: "Reset" }))) return;
+    const r = await api.post("/api/person/reset-votes", { id: +b.dataset.id, week_id: S.voteWeekId, admin_id: S.meId });
+    if (r.error) return toast(r.error, "bad");
+    toast(`${b.dataset.name}'s votes for this week are cleared.`, "good");
   })));
   document.querySelectorAll(".delPerson").forEach((b) => (b.onclick = busy(b, async () => {
     const who = S.people.find((x) => x.id === +b.dataset.id);
