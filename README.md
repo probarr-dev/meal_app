@@ -52,20 +52,6 @@ close a gap when you need it.
 Mark one *recurring* and it lands on every new week automatically (bleach,
 washing powder); leave it off for one-offs (crisps someone asked for).
 
-## Food lookups
-
-The meal editor can search **Open Food Facts** for macros — it has UK barcode
-coverage including Aldi own-brand, unlike USDA's database. MyFitnessPal has no
-public API, so it isn't an option.
-
-Two deliberate choices, given this runs on a privacy-focused network:
-
-- Lookups are **manual only**. Nothing is sent anywhere unless you press Search.
-- Results are **cached in SQLite**, so a repeat lookup for the same item never
-  leaves your network again.
-
-If a product isn't found, type the macros in by hand — the fields are always there.
-
 ## Voting
 
 Each person picks who they are (top-right). No passwords — it's a LAN app for one
@@ -82,14 +68,6 @@ household and passwords for children are friction with no threat model behind th
 One honest limit: in a small household, vote *counts* can still leak inference
 (if only one parent exists and a meal shows a parent vote, you know who). Names
 are never shown, but perfect anonymity isn't achievable at this family size.
-
-## Verifying macros
-
-Every macro seeded into the library was **estimated, not measured**. Meals show
-`⚠ N unverified macros` until checked. **Verify macros** walks each plate item in
-turn: search the real product, give your portion in grams, and it recalculates —
-or type the numbers in if Open Food Facts doesn't have it. Verified items survive
-later edits to the meal.
 
 ## Backups
 

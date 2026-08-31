@@ -112,14 +112,3 @@ CREATE TABLE IF NOT EXISTS meal_request (
   person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
   PRIMARY KEY (week_id, meal_id, person_id)
 );
-
--- Local cache of Open Food Facts lookups, so a repeat never leaves the network.
-CREATE TABLE IF NOT EXISTS food (
-  id          INTEGER PRIMARY KEY,
-  name        TEXT NOT NULL,
-  brand       TEXT DEFAULT '',
-  barcode     TEXT UNIQUE,
-  kcal_100    REAL, protein_100 REAL, carbs_100 REAL, fat_100 REAL,
-  source      TEXT DEFAULT 'openfoodfacts',
-  cached_at   TEXT DEFAULT (datetime('now'))
-);
