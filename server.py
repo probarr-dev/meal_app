@@ -69,8 +69,6 @@ def migrate(conn):
         # Lunches are their own menu — beans on toast, a sandwich, an omelette —
         # not the family dinner recipes. Existing meals default to dinner.
         ("meal", "meal_type", "TEXT DEFAULT 'proper'"),
-        ("meal_portion", "verified", "INTEGER DEFAULT 0"),
-        ("meal_portion", "source", "TEXT DEFAULT ''"),
         ("routine_item", "deleted_at", "TEXT"),
         ("extra", "use_count", "INTEGER DEFAULT 0"),
         # Household admin: can edit the fixed routine, week-start day, and
@@ -976,8 +974,6 @@ class Handler(SimpleHTTPRequestHandler):
             viewer = q.get("person", [""])[0]
             out = rows(conn.execute("""
                 SELECT m.*, (SELECT COUNT(*) FROM week_day wd WHERE wd.meal_id=m.id) AS times_used,
-                       (SELECT COUNT(*) FROM meal_portion mp
-                         WHERE mp.meal_id=m.id AND mp.verified=0) AS unverified,
                        (SELECT ROUND(AVG(stars), 1) FROM meal_rating WHERE meal_id=m.id) AS rating_avg,
                        (SELECT COUNT(*) FROM meal_rating WHERE meal_id=m.id) AS rating_count
                 FROM meal m WHERE m.deleted_at IS NULL ORDER BY m.name"""))
@@ -1212,12 +1208,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if not p.get("label"):
                     continue
                 conn.execute("""INSERT INTO meal_portion
-                                (meal_id,label,kcal,protein,carbs,fat,optional,verified,source)
-                                VALUES (?,?,?,?,?,?,?,?,?)""",
+                                (meal_id,label,kcal,protein,carbs,fat,optional)
+                                VALUES (?,?,?,?,?,?,?)""",
                              (mid, p["label"], float(p.get("kcal") or 0), float(p.get("protein") or 0),
                               float(p.get("carbs") or 0), float(p.get("fat") or 0),
-                              int(p.get("optional") or 0), int(p.get("verified") or 0),
-                              p.get("source") or ""))
+                              int(p.get("optional") or 0)))
             conn.commit()
             return self.send_json({"id": mid})
 
