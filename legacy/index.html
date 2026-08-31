@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meal Plan &amp; Protein Tracker</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section class="block">
+  <div class="block-head">
+    <h1>Shopping List</h1>
+    <div class="actions no-print">
+      <button id="copyBtn">Copy list</button>
+      <button onclick="window.print()">Print</button>
+    </div>
+  </div>
+  <p class="subtitle">One Aldi shop for the whole family. Your bigger portions are already in the quantities.</p>
+  <div id="shoppingList" class="card"></div>
+</section>
+
+<section class="block">
+  <div class="block-head">
+    <h1>Weekly Meal Plan</h1>
+  </div>
+  <p class="subtitle">Target 130&ndash;150g protein/day &middot; ● marks a training day</p>
+  <div id="weekSummary" class="summary no-print"></div>
+</section>
+
+<main id="days"></main>
+
+<footer class="no-print">
+  <button id="newWeekBtn">Start a new week</button>
+  <p class="note">Saved in this browser only.</p>
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

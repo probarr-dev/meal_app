@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Meal Planner</title>
+
+<!-- Home screen / installable web app. iOS ignores the manifest's icons and
+     only reads apple-touch-icon, so that PNG has to be listed separately. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1115">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Meals">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="tabs no-print">
+  <button id="navToggle" class="nav-toggle" aria-label="Menu">☰</button>
+  <div class="tab-links">
+    <a href="#/plan"     data-tab="plan">Plan</a>
+    <a href="#/shopping" data-tab="shopping">Shopping</a>
+    <a href="#/meals"    data-tab="meals">Meals</a>
+    <a href="#/vote"     data-tab="vote">Vote</a>
+    <a href="#/rewards"  data-tab="rewards">Rewards</a>
+    <a href="#/history"  data-tab="history">History</a>
+    <a href="#/settings" data-tab="settings">Settings</a>
+  </div>
+  <div class="tab-right">
+    <select id="whoPicker" class="who-picker" title="Who are you?"></select>
+    <div class="week-toggle" id="weekToggle">
+      <button data-which="this">This Week</button>
+      <button data-which="next">Next Week</button>
+    </div>
+  </div>
+</nav>
+<div id="navBackdrop" class="nav-backdrop no-print"></div>
+
+<main id="view"></main>
+
+<a href="#/vote" id="voteFab" class="vote-fab hidden no-print">🗳️ <span>Vote now!</span></a>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="modalTitle">Meal</h2>
+      <button id="modalClose" aria-label="Close">✕</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
