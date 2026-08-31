@@ -578,6 +578,49 @@ async function boot() {
     } catch (err) { /* offline or bad link — fall through to the normal gate */ }
   }
 
+  // A brand-new install: nothing but the "Family" placeholder exists. Only
+  // the chicken-and-egg case (the very first real person, with nobody yet
+  // around to authorise adding them) needs a dedicated screen — everyone
+  // after that is just the normal, already-working Settings > Family flow,
+  // reached the moment this first person is signed in.
+  if (S.needsSetup) {
+    document.querySelector(".tabs").style.display = "none";
+    document.getElementById("voteFab")?.classList.add("hidden");
+    document.getElementById("view").innerHTML = `
+      <div class="login-gate">
+        <h1>Welcome</h1>
+        <p class="subtitle">Let's get your household started. What's your name? You'll be able to
+          add everyone else, and set PINs, from Settings once you're in.</p>
+        <div class="card pad" style="max-width:340px;margin:0 auto">
+          <label class="field"><span>Your name</span>
+            <input id="setupName" placeholder="e.g. Martin" maxlength="30" autocomplete="off"></label>
+          <label class="field"><span>Role</span>
+            <select id="setupRole">
+              <option value="parent">Parent</option>
+              <option value="child">Child</option>
+            </select></label>
+          <button id="setupGo" class="primary" style="width:100%">Get started →</button>
+        </div>
+      </div>`;
+    const nameInput = document.getElementById("setupName");
+    nameInput.focus();
+    const go = document.getElementById("setupGo");
+    const submit = busy(go, async () => {
+      const name = nameInput.value.trim();
+      if (!name) return toast("Enter a name first.", "bad");
+      const res = await api.post("/api/person", { name, role: document.getElementById("setupRole").value })
+        .catch(() => null);
+      if (!res || res.error) return toast(res?.error || OFFLINE_MSG, "bad");
+      S.meId = res.person.id;
+      localStorage.setItem("mealplan-me", S.meId);
+      document.querySelector(".tabs").style.display = "";
+      boot();
+    });
+    go.onclick = submit;
+    nameInput.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+    return;
+  }
+
   // No valid remembered identity (fresh browser, cleared storage, someone
   // else's device) — don't guess. Nothing else renders until a person's
   // actually picked, PIN checked if they have one.
@@ -589,7 +632,7 @@ async function boot() {
         <h1>Who's this?</h1>
         <p class="subtitle">Pick yourself to continue. You'll be asked for your PIN if you have one set.</p>
         <div class="gate-people">
-          ${S.people.map((p) => `<button class="gate-person" data-id="${p.id}">${esc(p.name)}${p.has_pin ? " 🔒" : ""}</button>`).join("")}
+          ${S.people.filter((p) => !p.is_placeholder).map((p) => `<button class="gate-person" data-id="${p.id}">${esc(p.name)}${p.has_pin ? " 🔒" : ""}</button>`).join("")}
         </div>
       </div>`;
     document.querySelectorAll(".gate-person").forEach((btn) => {
@@ -605,6 +648,7 @@ async function boot() {
 
   const who = document.getElementById("whoPicker");
   who.innerHTML = S.people
+    .filter((p) => !p.is_placeholder)
     .map((p) => `<option value="${p.id}" ${p.id === S.meId ? "selected" : ""}>${esc(p.name)}${p.has_pin ? " 🔒" : ""}</option>`)
     .join("");
   who.dataset.prev = S.meId || "";
@@ -624,6 +668,7 @@ async function boot() {
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
   S.shopDone = !!b.shopDone;
+  S.needsSetup = !!b.needsSetup;
   DAYS = WEEKDAY_NAMES.slice(S.weekStartDow).concat(WEEKDAY_NAMES.slice(0, S.weekStartDow));
   SHORT = WEEKDAY_SHORT.slice(S.weekStartDow).concat(WEEKDAY_SHORT.slice(0, S.weekStartDow));
   if (!S.weekId || !S.weeks.some((w) => w.id === S.weekId)) S.weekId = S.thisWeekId;
@@ -2101,7 +2146,7 @@ async function viewSettings() {
     <h2 class="sec-title">Family</h2>
     <p class="subtitle">Parents' votes outrank children's. Anyone can be switched at any time${isAdmin() ? " — you're the household admin, so you can also promote others." : "."}</p>
     <div class="card pad">
-      ${S.people.map((x) => `
+      ${S.people.filter((x) => !x.is_placeholder).map((x) => `
         <div class="person-row-full">
           <div class="row person-row">
             <span class="row-label">${esc(x.name)}${x.is_admin ? ` <span class="tag">admin</span>` : ""}${x.pin_default ? ` <span class="tag" style="color:var(--low)">default PIN</span>` : ""}</span>
@@ -2163,7 +2208,7 @@ async function viewSettings() {
     <p class="subtitle">Admin only. Choose which pages each person sees — for anyone, including yourself.
       Leave everything ticked for "no restriction" (the default for everyone right now).</p>
     <div class="card pad" id="pageAccessList">
-      ${S.people.map((x) => {
+      ${S.people.filter((x) => !x.is_placeholder).map((x) => {
         const allowed = allowedTabsFor(x);
         const unrestricted = !x.allowed_tabs;
         return `

@@ -9,12 +9,16 @@ from server import db, init_db, week_start_of
 # name, tracked, role, protein_min, protein_max
 # kcal target is deliberately NOT seeded — it's calculated from real body stats
 # entered in Settings, rather than guessed here.
+#
+# No real household is seeded here — that's what the first-run setup wizard
+# is for (add yourself, you become admin automatically). The one row below is
+# a placeholder that ships with the example meal library so recipes/extras
+# can have a "who's it for" without hardcoding anyone's actual name; it never
+# appears at login or in Settings, only as an option on meals/extras.
 PEOPLE = [
-    ("Martin", 1, "parent", 130, 150),
-    ("Ethan",  0, "child",  None, None),
-    ("Aubree", 0, "child",  None, None),
-    ("Gabby",  0, "child",  None, None),
+    ("Family", 0, "parent", None, None),
 ]
+PLACEHOLDER_PEOPLE = {"Family"}
 
 ROUTINE = [
     # key, label, when, kcal, P, C, F, training_only, default_on, sort, eggs, shakes
@@ -161,7 +165,7 @@ EXTRAS = [
     ("Bleach", "Household", None, 1, 1, "unit"),
     ("Washing powder", "Household", None, 1, 1, "unit"),
     ("Bin bags", "Household", None, 1, 1, "pack"),
-    ("Crisps (multipack)", "Snacks", "Aubree", 0, 1, "pack"),
+    ("Crisps (multipack)", "Snacks", "Family", 0, 1, "pack"),
 ]
 
 
@@ -177,8 +181,9 @@ def main():
             return
 
         for name, tracked, role, pmin, pmax in PEOPLE:
-            conn.execute("""INSERT OR IGNORE INTO person(name,tracked,role,protein_min,protein_max)
-                            VALUES (?,?,?,?,?)""", (name, tracked, role, pmin, pmax))
+            conn.execute("""INSERT OR IGNORE INTO person(name,tracked,role,protein_min,protein_max,is_placeholder)
+                            VALUES (?,?,?,?,?,?)""",
+                         (name, tracked, role, pmin, pmax, int(name in PLACEHOLDER_PEOPLE)))
 
         for r in ROUTINE:
             conn.execute("""INSERT OR IGNORE INTO routine_item
