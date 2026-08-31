@@ -20,17 +20,6 @@ PEOPLE = [
 ]
 PLACEHOLDER_PEOPLE = {"Family"}
 
-ROUTINE = [
-    # key, label, when, kcal, P, C, F, training_only, default_on, sort, eggs, shakes
-    ("preGym",   "Egg-in-a-basket (2 eggs)", "pre-gym",  250, 15, 16, 14, 1, 1, 10, 2, 0),
-    ("omelette", "3-egg omelette + tomato",  "11am",     240, 19,  3, 17, 0, 1, 20, 3, 0),
-    ("postGym",  "Whey shake",               "post-gym", 120, 24,  3,  2, 1, 1, 30, 0, 1),
-    # Third eating occasion. Oats-based deliberately — tolerated, unlike bread/pasta.
-    ("afternoon", "Oats, whey, peanut butter + banana", "~4pm", 800, 45, 85, 22, 0, 1, 60, 0, 1),
-    ("shake1",   "Top-up shake",             "flexible", 120, 24,  3,  2, 0, 0, 90, 0, 1),
-    ("shake2",   "Top-up shake",             "flexible", 120, 24,  3,  2, 0, 0, 91, 0, 1),
-]
-
 PUDDING = ("Aldi protein pudding", 180, 20, 12, 5, 1)
 
 MEALS = [
@@ -184,11 +173,6 @@ def main():
             conn.execute("""INSERT OR IGNORE INTO person(name,tracked,role,protein_min,protein_max,is_placeholder)
                             VALUES (?,?,?,?,?,?)""",
                          (name, tracked, role, pmin, pmax, int(name in PLACEHOLDER_PEOPLE)))
-
-        for r in ROUTINE:
-            conn.execute("""INSERT OR IGNORE INTO routine_item
-                (key,label,when_txt,kcal,protein,carbs,fat,training_only,default_on,sort,eggs,shakes)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", r)
 
         meal_ids = {}
         for m in MEALS:
