@@ -1,0 +1,990 @@
+:root {
+  --bg:#0f1115; --card:#1a1d24; --border:#2a2e38; --text:#e8e9ec; --muted:#8b909c;
+  --accent:#4f8cff; --good:#3ec97a; --low:#e0a83c; --bad:#e0553c;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg); color:var(--text); line-height:1.45;
+  padding-bottom:calc(60px + env(safe-area-inset-bottom, 0px));
+}
+
+/* tabs */
+.tabs {
+  position:sticky; top:0; z-index:20; display:flex; align-items:center;
+  gap:8px; flex-wrap:wrap;
+  background:color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--border); padding:8px 12px;
+  /* Installed to the home screen the app runs full-bleed under the status bar
+     (viewport-fit=cover + black-translucent), so the bar has to hold itself
+     clear of the notch. Falls back to plain padding everywhere else. */
+  padding-top:calc(8px + env(safe-area-inset-top, 0px));
+  padding-left:calc(12px + env(safe-area-inset-left, 0px));
+  padding-right:calc(12px + env(safe-area-inset-right, 0px));
+}
+.tab-links { display:flex; gap:2px; flex:1; min-width:0; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.tab-links::-webkit-scrollbar { display:none; }
+.tab-right { display:flex; gap:6px; flex-shrink:0; }
+.tabs a {
+  padding:6px 10px; border-radius:8px; text-decoration:none; color:var(--muted);
+  font-size:.88rem; font-weight:500; white-space:nowrap;
+}
+.tabs a:hover { color:var(--text); }
+.tabs a.active { background:var(--card); color:var(--text); }
+.tabs a.hidden { display:none; }
+
+/* Utility. There were four scoped .hidden rules and no general one, so
+   .hidden on anything else silently did nothing — an emptied card still
+   painted its own padding as a stray bar. */
+.hidden { display:none !important; }
+
+/* Native controls default to a light-theme look; hand them the accent so
+   checkboxes and the like sit in the dark palette rather than on top of it. */
+input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
+.who-picker {
+  background:var(--card); color:var(--text); max-width:30vw;
+  border:1px solid var(--border); border-radius:8px; padding:5px 8px; font-size:.82rem;
+}
+.week-toggle { display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.week-toggle button {
+  background:var(--card); color:var(--muted); border:none; border-radius:0;
+  padding:7px 12px; font-size:.82rem; font-weight:600; white-space:nowrap;
+}
+.week-toggle button.on { background:var(--accent); color:#fff; }
+.week-toggle button + button { border-left:1px solid var(--border); }
+.nav-toggle {
+  display:none; background:none; border:none; color:var(--text);
+  font-size:1.3rem; padding:2px 4px; line-height:1; flex-shrink:0;
+}
+.nav-backdrop {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:19;
+}
+
+@media (max-width:560px) {
+  .who-picker { max-width:26vw; font-size:.76rem; }
+  .week-toggle button { padding:7px 9px; font-size:.76rem; }
+  .nav-toggle { display:block; }
+  /* Page navigation moves into a slide-out drawer on mobile — seven tabs in
+     one horizontal scroll strip was the actual complaint, this fixes that
+     without touching desktop at all. "This Week/Next Week" and "who am I"
+     stay in the top bar since those get used constantly, not just at
+     navigation time. */
+  .tab-links {
+    position:fixed; top:0; left:0; height:100vh; width:240px; z-index:21;
+    padding-top:calc(60px + env(safe-area-inset-top, 0px));
+    flex-direction:column; align-items:stretch; overflow-x:visible;
+    background:var(--card); border-right:1px solid var(--border);
+    padding:60px 10px 20px; gap:2px;
+    transform:translateX(-100%); transition:transform .2s ease;
+  }
+  body.nav-open .tab-links { transform:translateX(0); }
+  body.nav-open .nav-backdrop { display:block; }
+  .tab-links a { padding:12px 14px; font-size:1rem; }
+}
+
+main { max-width:720px; margin:0 auto; padding:20px 16px 0; }
+
+/* One row on every page, whatever actions it carries — a header that changes
+   height page to page makes everything below it jump as you switch tabs.
+   The 1fr/auto/1fr columns keep the title dead centre regardless of how many
+   buttons sit on the right; the buttons shed their labels on a phone so they
+   stay narrow enough not to crowd it. */
+.block-head {
+  display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+  gap:8px; margin-bottom:12px; min-height:38px;
+}
+/* Title left, week centred, actions right. The outer tracks are both 1fr so
+   they stay equal, which is what keeps the date dead centre on the page
+   whether or not the page has any buttons. */
+.block-head h1 { grid-column:1; justify-self:start; text-align:left; }
+.block-head .week-range { grid-column:2; justify-self:center; }
+.block-head .actions { grid-column:3; justify-self:end; }
+h1 { margin:0; font-size:1.45rem; }
+/* Big enough to read at arm's length in a shop, and never split across lines. */
+.week-range {
+  font-size:1rem; font-weight:500; color:var(--muted);
+  white-space:nowrap;
+}
+.sec-title { font-size:1.05rem; margin:26px 0 2px; }
+.subtitle { color:var(--muted); margin:4px 0 14px; font-size:.86rem; }
+.hint { color:var(--muted); font-size:.75rem; display:block; }
+.empty { color:var(--muted); font-size:.85rem; font-style:italic; }
+
+button {
+  background:var(--card); border:1px solid var(--border); color:var(--text);
+  padding:6px 12px; border-radius:8px; cursor:pointer; font-size:.85rem;
+  transition:transform .08s ease, background .1s ease, opacity .1s ease;
+}
+button:hover { border-color:var(--accent); }
+/* :hover means nothing on touch — this is what actually says "that tap
+   registered" on a phone, and it fires the instant a finger presses, before
+   any network round trip even starts. */
+button:active { transform:scale(.96); background:color-mix(in srgb, var(--accent) 14%, var(--card)); }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+button.primary:active { background:color-mix(in srgb, var(--accent) 80%, #000); }
+button.ghost { background:none; color:var(--muted); font-size:.8rem; padding:4px 8px; }
+
+/* Every async button/select in the app goes through busy(), which adds this
+   class for exactly the length of its own network round trip: disabled (so a
+   second tap during that window is genuinely ignored, not just discouraged)
+   and visibly waiting, rather than looking identical to a normal idle button
+   while secretly doing nothing. */
+button.busy, select.busy {
+  opacity:.6; cursor:wait; position:relative; color:transparent !important;
+}
+button.busy::after {
+  content:""; position:absolute; inset:0; margin:auto; width:15px; height:15px;
+  border-radius:50%; border:2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color:#fff; animation:busy-spin .6s linear infinite;
+}
+button.ghost.busy::after, button:not(.primary):not(.ghost).busy::after { border-top-color:var(--accent); }
+select.busy { opacity:.6; cursor:wait; }
+@keyframes busy-spin { to { transform:rotate(360deg); } }
+.actions { display:flex; gap:8px; flex-shrink:0; }
+/* Icon sits beside its label on a wide screen; on a phone the label is hidden
+   and the icon stands alone (see the mobile block below). */
+.actions button, .actions .btn-link { display:inline-flex; align-items:center; gap:6px; }
+
+input:not([type=checkbox]):not([type=radio]), select, textarea {
+  background:var(--bg); color:var(--text); border:1px solid var(--border);
+  border-radius:7px; padding:6px 8px; font-size:.86rem; font-family:inherit;
+}
+input:focus, select:focus { outline:none; border-color:var(--accent); }
+
+/* Checkboxes/radios are replaced elements — the text-input box styling above
+   (padding/border/background) renders inconsistently on them across browsers
+   (notably iOS Safari), causing an oversized box that overlaps nearby text.
+   Give them their own clean, fixed-size reset instead. */
+input[type=checkbox], input[type=radio] {
+  width:16px; height:16px; min-width:16px; flex-shrink:0; margin:0;
+  accent-color:var(--accent); background:none; border:none; padding:0;
+}
+
+.card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:4px 16px 12px; }
+
+/* rows */
+.row { display:flex; align-items:center; gap:10px; padding:3px 0; cursor:pointer; }
+.row input[type=checkbox] { width:17px; height:17px; flex-shrink:0; margin:0; }
+.row-label { flex:1; font-size:.92rem; }
+.when { color:var(--muted); font-size:.72rem; margin-left:8px; }
+.grams { color:var(--muted); font-size:.85rem; font-variant-numeric:tabular-nums; min-width:38px; text-align:right; }
+.inline { display:inline-flex; align-items:center; gap:5px; font-size:.78rem; color:var(--muted); }
+.inline input { width:15px; height:15px; }
+
+/* days */
+
+/* shopping */
+.aisle { padding-top:10px; cursor:grab; }
+.aisle.dragging { opacity:.4; }
+.drag-handle {
+  color:var(--muted); margin-right:4px; cursor:grab; padding:6px 10px; margin:-6px 2px -6px -10px;
+  border-radius:6px; display:inline-block;
+  /* Without this the browser tries to start a page-scroll gesture on the
+     first touch move, which fights the drag and can cancel it outright. */
+  touch-action:none; user-select:none;
+}
+.drag-handle:active { cursor:grabbing; background:color-mix(in srgb, var(--accent) 14%, transparent); }
+.aisle.dragging { opacity:.6; }
+
+.aisle h3 {
+  font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+  margin:6px 0 4px; border-bottom:1px solid var(--border); padding-bottom:4px;
+}
+.shop-row { align-items:baseline; }
+.qty { min-width:66px; font-variant-numeric:tabular-nums; color:var(--muted); font-size:.85rem; flex-shrink:0; }
+.shop-item { flex:1; min-width:0; }   /* same reason: must be allowed to wrap */
+.tag {
+  font-size:.65rem; text-transform:uppercase; letter-spacing:.04em; background:var(--border);
+  color:var(--muted); padding:1px 6px; border-radius:999px; margin-left:6px; vertical-align:middle;
+}
+.tag-protein { background:color-mix(in srgb, var(--accent) 15%, transparent); color:var(--accent); }
+.tag-warn { background:color-mix(in srgb, var(--low) 18%, transparent); color:var(--low); text-transform:none; letter-spacing:0; }
+.shop-source-inline { font-size:.74rem; color:var(--muted); margin-left:4px; }
+.shop-source-inline .shop-source-btn {
+  background:none; border:none; padding:0; color:var(--muted); font-size:.74rem;
+  text-decoration:underline; cursor:pointer; font-family:inherit;
+}
+.shop-source-inline .shop-source-btn:hover { color:var(--accent); }
+.extra-row { align-items:center; }
+/* Fixed width, not min-width: these labels ("1 unit each" / "1 pack each")
+   are long enough to exceed the .qty floor, so the column took its content
+   width and every "pack" row pushed the item name 7px right of every "unit"
+   row. The aisle list above only looks aligned because its shorter labels
+   ("1 pack", "x 8") all stay under that floor. */
+.extra-row .qty { width:96px; flex:0 0 96px; white-space:nowrap; }
+.extra-row .del, .extra-row .editExtra { padding:2px 7px; font-size:.75rem; }
+.extra-row.on { background:color-mix(in srgb, var(--good) 8%, transparent); border-radius:8px; padding:3px 6px; margin:0 -6px; }
+.extra-stepper { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.stepBtn {
+  flex-shrink:0; width:34px; height:34px; padding:0; border-radius:9px;
+  background:var(--card); border:1px solid var(--border); color:var(--text);
+  font-size:1.2rem; font-weight:700; line-height:1; display:flex; align-items:center; justify-content:center;
+}
+.stepPlus { color:var(--good); border-color:color-mix(in srgb, var(--good) 40%, var(--border)); }
+.stepMinus { color:var(--bad); }
+.extra-qty-val { min-width:20px; text-align:center; font-weight:700; font-variant-numeric:tabular-nums; }
+.extra-row:not(.on) .extra-qty-val { color:var(--muted); }
+.add-extra { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+/* Two adjacent dropdowns both read "Household" — one meaning the aisle, one
+   meaning who it's for — with nothing to say which was which. A small caption
+   over each control costs one line and removes the guesswork entirely. */
+.add-extra .mini { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.add-extra .mini > span {
+  font-size:.63rem; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--muted); white-space:nowrap;
+}
+.add-extra .mini.grow { flex:1; min-width:150px; }
+.add-extra .mini.grow input { width:100%; }
+.add-extra .inline { align-self:center; padding-bottom:6px; }
+.add-extra #exItem { flex:1; min-width:150px; }
+.add-extra-top { margin-bottom:16px; }
+
+/* The quick path: name + Add on one line, everything else folded away. */
+.add-quick { display:flex; gap:8px; align-items:center; }
+.add-quick #exItem { flex:1; min-width:0; }
+.add-quick .primary { flex-shrink:0; }
+.add-quick-foot {
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px; margin-top:7px; min-height:20px;
+}
+.aisle-hint { font-size:.76rem; color:var(--muted); min-width:0; }
+.link-toggle {
+  background:none; border:none; color:var(--muted); font-size:.76rem;
+  padding:2px 4px; flex-shrink:0;
+}
+.link-toggle:hover { color:var(--accent); }
+.add-options {
+  display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;
+  margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+}
+.add-options .mini { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.add-options .mini > span {
+  font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+}
+.add-options .mini input, .add-options .mini select { min-width:0; }
+.add-options #exAmt { max-width:76px; }
+.add-options .inline { align-self:center; padding-bottom:6px; }
+.add-extra-top .add-extra { margin-top:0; padding-top:0; border-top:none; }
+
+/* meals */
+.meal-grid { display:flex; flex-direction:column; gap:8px; }
+.meal-card {
+  background:var(--card); border:1px solid var(--border); border-radius:12px;
+  padding:12px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+}
+/* min-width:0 on every flex item in the chain: the default min-width:auto
+   refuses to shrink below the content's intrinsic width, and .ing-preview is
+   white-space:nowrap — so one long ingredient list dragged the whole card to
+   641px at a 375px viewport and gave the page a horizontal scroll. */
+.meal-card-main { flex:1; min-width:0; }
+.meal-card-head { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0; }
+.meal-card h3 { margin:0; font-size:.98rem; }
+.meal-card-stats { display:flex; gap:14px; min-width:0; }
+.meal-card-stats .hint { margin:0; }
+.ing-preview {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  display:block; max-width:100%; min-width:0;
+}
+.meal-card-actions { display:flex; gap:6px; flex-shrink:0; }
+.meal-card-actions button { padding:3px 9px; font-size:.78rem; }
+@media (max-width:560px) {
+  .meal-card { flex-direction:column; align-items:stretch; min-width:0; }
+  .meal-card-actions { justify-content:flex-end; }
+  /* One nowrap line's min-content width propagates all the way up and drags
+     the card past the viewport (the "Salad" card, with the longest ingredient
+     list, was 641px at 375px wide). Wrapping to two clamped lines removes the
+     min-content pressure entirely and shows more of the list, which is what
+     you actually want on a phone. */
+  .ing-preview {
+    white-space:normal; text-overflow:clip;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+}
+
+/* history */
+.hist { margin-bottom:12px; }
+.hist-head { display:flex; justify-content:space-between; align-items:center; padding-top:10px; }
+.hist-head h3 { margin:0; font-size:.98rem; }
+.hist-days { display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:6px; margin:10px 0 4px; }
+.hist-day { display:flex; flex-direction:column; font-size:.76rem; padding:6px 8px; background:var(--bg); border-radius:7px; }
+.hist-dow { color:var(--muted); font-size:.68rem; }
+
+/* modal */
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:flex-start;
+  justify-content:center; padding:24px 16px; overflow-y:auto; z-index:50; }
+.modal.hidden { display:none; }
+.modal-card { background:var(--card); border:1px solid var(--border); border-radius:14px;
+  padding:18px 20px 22px; max-width:660px; width:100%; }
+.modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.modal-head h2 { margin:0; font-size:1.1rem; }
+.modal-head button { padding:2px 9px; }
+.modal-actions { margin-top:18px; display:flex; justify-content:flex-end; }
+.field { display:block; margin-bottom:10px; }
+.field span { display:block; font-size:.76rem; color:var(--muted); margin-bottom:3px; }
+/* Excludes checkbox/radio: this is a descendant selector, so it was also
+   matching the Categories checkboxes nested inside .field > .tag-picker,
+   stretching each one to the full label width — the actual cause of the
+   checkbox/text overlap, confirmed by inspecting the live computed style. */
+.field input:not([type=checkbox]):not([type=radio]), .field select { width:100%; }
+/* Checkbox settings read as a switch-style row: label left, control right. */
+.field-check { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.field-check span { margin-bottom:0; font-size:.9rem; color:var(--fg); }
+.field-check input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; }
+#modalBody h4 { margin:18px 0 6px; font-size:.85rem; }
+#modalBody h4 .hint { display:inline; font-weight:400; }
+.grid-row { display:flex; gap:5px; margin-bottom:5px; align-items:center; }
+.grid-row input, .grid-row select { min-width:0; }
+.grid-row.ing .i-item { flex:3; } .grid-row.ing .i-amt { flex:1; }
+.grid-row.ing .i-unit, .grid-row.ing .i-aisle { flex:1.4; }
+.grid-row .rm { padding:3px 8px; font-size:.75rem; flex-shrink:0; }
+
+.vote-fab {
+  position:fixed; right:16px; bottom:16px; z-index:30;
+  display:flex; align-items:center; gap:8px;
+  background:linear-gradient(135deg,var(--accent),#7c4dff);
+  color:#fff; text-decoration:none; font-weight:700; font-size:.95rem;
+  padding:13px 20px; border-radius:999px; box-shadow:0 6px 20px rgba(0,0,0,.35);
+  animation:vote-fab-pulse 1.8s ease-in-out infinite;
+}
+.vote-fab.hidden { display:none; }
+/* The drawer (21) and its backdrop (19) must cover the FAB (30), or it hovers
+   over the open menu and stays tappable through the overlay. */
+body.nav-open .vote-fab { display:none; }
+@keyframes vote-fab-pulse {
+  0%, 100% { transform:scale(1); }
+  50% { transform:scale(1.06); }
+}
+@media (max-width:560px) {
+  .vote-fab { right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); padding:12px 18px; font-size:.9rem; }
+}
+
+.reward-balance-card {
+  text-align:center; background:var(--card); border:1px solid var(--border);
+  border-radius:14px; padding:22px; margin-bottom:18px;
+}
+.reward-balance-big { font-size:2.4rem; font-weight:700; color:var(--accent); }
+.reward-grid { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+.reward-card {
+  background:var(--card); border:1px solid var(--border); border-radius:12px;
+  padding:11px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; text-align:left;
+}
+.reward-card.locked { opacity:.55; }
+.reward-card .reward-name { flex:1; min-width:140px; }
+.reward-card .reward-cost { margin:0; }
+@media (max-width:560px) { .reward-card { flex-direction:column; align-items:stretch; text-align:center; } }
+.reward-name { font-weight:600; margin-bottom:4px; }
+.reward-cost { color:var(--accent); font-size:.85rem; margin-bottom:6px; }
+.redemption-row { flex-wrap:wrap; border-bottom:1px solid var(--border); padding:8px 0; }
+.redemption-row:last-child { border-bottom:none; }
+.vote-type-filter { margin-bottom:10px; }
+
+/* notices */
+/* Flat tinted panels rather than outlined boxes — an outline on every notice
+   made three stacked messages read as three competing alerts. The tint alone
+   separates them from the page, and severity is carried by hue. */
+.notice {
+  background:color-mix(in srgb, var(--accent) 10%, transparent); border:none;
+  border-radius:12px; padding:11px 14px; font-size:.85rem; margin-bottom:12px;
+}
+.notice.small { font-size:.8rem; padding:9px 12px; }
+.notice a { color:var(--accent); }
+.notice.at-cap { background:color-mix(in srgb, var(--low) 14%, transparent); }
+.notice.warn { background:color-mix(in srgb, var(--bad) 13%, transparent); }
+.notice.info { background:color-mix(in srgb, var(--low) 13%, transparent); }
+.notice.good { background:color-mix(in srgb, var(--good) 13%, transparent); }
+
+/* simple plan (default view) */
+/* Holds every meal in the library, so the option text is long. Without a cap
+   the select takes its intrinsic content width and pushes the page sideways. */
+.dayMealSelect { max-width:100%; min-width:0; flex:1; }
+.simple-meal { color:var(--text); font-size:.9rem; }
+/* Tapping the meal name opens a read-only peek at what's in it. Styled to
+   look like the plain text it replaced, not like a button. */
+button.meal-peek {
+  background:none; border:none; padding:0; font:inherit; color:var(--text);
+  text-align:left; cursor:pointer; border-bottom:1px dotted var(--border);
+}
+button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent); }
+.peek-ings { list-style:none; padding:0; margin:0; }
+.peek-ings li { display:flex; gap:10px; padding:4px 0; border-bottom:1px solid var(--border); font-size:.88rem; }
+.peek-ings li:last-child { border-bottom:none; }
+.peek-ings .pk-qty { min-width:74px; color:var(--muted); font-variant-numeric:tabular-nums; }
+@media (max-width:560px) {
+  .day.simple .day-header { flex-direction:column; align-items:flex-start; gap:6px; }
+}
+
+.attend-confirm { margin-bottom:16px; }
+.attend-confirm > .hint { margin:2px 0 10px; }
+
+.suggest-box {
+  margin-top:16px; padding:13px 15px; border-radius:12px;
+  background:var(--card); border:1px dashed var(--border);
+}
+.suggest-box h3 { margin:0 0 3px; font-size:.9rem; }
+.suggest-row { display:flex; gap:8px; margin-top:8px; }
+.suggest-row input { flex:1; }
+
+/* vote — same vocabulary as the Plan timeline and the shopping list: round tap
+   target, quiet meta line above, the name doing the talking. No borders. */
+.vote-grid { display:flex; flex-direction:column; gap:2px; }
+.vote-row {
+  display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap;
+  padding:10px 4px; position:relative;
+}
+.vote-hit {
+  all:unset; display:flex; align-items:flex-start; gap:12px;
+  flex:1; min-width:0; cursor:pointer;
+}
+.vote-hit[aria-disabled="true"] { cursor:not-allowed; }
+.vote-check {
+  flex:0 0 26px; width:26px; height:26px; border-radius:50%; margin-top:2px;
+  box-shadow:inset 0 0 0 2px var(--border); position:relative;
+  transition:background .15s ease, box-shadow .15s ease;
+}
+.vote-row.voted .vote-check {
+  background:var(--accent); box-shadow:inset 0 0 0 2px var(--accent);
+}
+.vote-row.voted .vote-check::after {
+  content:"✓"; position:absolute; inset:0; display:flex;
+  align-items:center; justify-content:center; color:#fff;
+  font-size:.82rem; font-weight:700;
+}
+.vote-body { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.vote-meta {
+  font-size:.66rem; font-weight:600; text-transform:uppercase;
+  letter-spacing:.07em; color:var(--muted);
+}
+.vote-name { font-size:1.02rem; font-weight:600; line-height:1.25; }
+/* Chosen is the good outcome, so it reads in the positive colour rather than
+   as another ring competing with the liked state. */
+.vote-row.chosen .vote-meta { color:var(--good); }
+/* Vetoed rows sort to the top now, so they read as a warning band rather
+   than fading into the list — full opacity, red-tinted, same vocabulary as
+   .notice.warn elsewhere. The like checkbox is left alone: it still shows
+   your own real pick independently of the veto, which is the whole point of
+   being able to unpick something after it's been vetoed. */
+.vote-row.vetoed {
+  opacity:1; background:color-mix(in srgb, var(--bad) 11%, transparent);
+  border-radius:10px; margin:0 -8px; padding-left:8px; padding-right:8px;
+}
+.vote-row.vetoed .vote-meta { color:var(--bad); }
+.vote-row.vetoed .vote-name { text-decoration:line-through; color:color-mix(in srgb, var(--bad) 55%, var(--text)); }
+/* Distinct from vetoed on purpose — vetoed means "nobody wants this again",
+   capped just means "no room left in your picks right now". Muted, not red;
+   nothing permanent about it, it un-greys the instant a slot frees up. */
+.vote-row.capped { opacity:.45; }
+.vote-row.capped .vote-check { box-shadow:inset 0 0 0 2px var(--border); opacity:.6; }
+.veto-btn {
+  flex-shrink:0; align-self:center; font-size:.7rem; padding:4px 9px;
+  border-radius:999px; background:none; border:none; color:var(--muted);
+  opacity:.65;
+}
+.veto-btn:hover { opacity:1; color:var(--bad); }
+.veto-btn.on { color:var(--bad); opacity:1; }
+.tag-chosen { border-color:var(--good); color:var(--good); }
+.vote-ing-warn { display:flex; align-items:center; gap:8px; flex-wrap:wrap; flex:1 1 100%; }
+.addIngBtn { padding:3px 11px; font-size:.72rem; flex-shrink:0; margin-left:auto; }
+@media (max-width:560px) {
+  .vote-ing-warn { justify-content:space-between; }
+  .addIngBtn { margin-left:0; }
+}
+
+.access-row { border-bottom:1px solid var(--border); padding:10px 0; }
+.access-row:last-child { border-bottom:none; }
+.access-row-name { font-weight:600; margin-bottom:6px; }
+.access-row .accessSave { margin-top:8px; }
+.color-swatches { display:flex; flex-wrap:wrap; gap:8px; }
+.swatch {
+  width:32px; height:32px; border-radius:50%; border:2px solid transparent;
+  padding:0; cursor:pointer;
+}
+.swatch.on { border-color:var(--text); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px currentColor; }
+.swatch-clear { background:var(--card); border:1px solid var(--border); color:var(--muted); font-size:.85rem; }
+.vote-tags { display:flex; flex-wrap:wrap; gap:3px; }
+.winner-box {
+  margin-top:18px; padding:14px 16px; border-radius:12px; border:none;
+  background:color-mix(in srgb, var(--good) 11%, transparent);
+}
+.winner-box h3 { margin:0 0 5px; font-size:.92rem; color:var(--good); }
+.winner-box p { margin:0 0 4px; font-size:.86rem; }
+.winner-box h3 ~ h3 { margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
+
+.overview-toggle {
+  width:100%; margin-bottom:10px; background:none; border:none;
+  color:var(--muted); text-align:left; padding:8px 4px; font-size:.85rem;
+}
+.overview-toggle:hover { color:var(--text); }
+.overview-days { display:flex; flex-direction:column; gap:14px; margin-top:8px; }
+.overview-day h4 { margin:0 0 6px; font-size:.88rem; }
+.overview-day h4 .hint { font-size:.76rem; font-weight:400; }
+/* Same shape as a vote row: round tick, standing on a quiet line above, name
+   below. The voters used to be a full-width element that wrapped under the
+   row with no indent, so it read as belonging to the NEXT meal along. */
+.overview-row {
+  display:flex; align-items:flex-start; gap:11px;
+  padding:7px 0; font-size:.85rem; cursor:pointer;
+}
+.overview-row .finalizeCb {
+  appearance:none; -webkit-appearance:none; flex:0 0 22px; width:22px; height:22px;
+  margin:1px 0 0; border-radius:50%; box-shadow:inset 0 0 0 2px var(--border);
+  background:none; position:relative; cursor:pointer;
+}
+.overview-row .finalizeCb:checked {
+  background:var(--good); box-shadow:inset 0 0 0 2px var(--good);
+}
+.overview-row .finalizeCb:checked::after {
+  content:"✓"; position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; color:#fff; font-size:.72rem; font-weight:700;
+}
+.ov-body { display:flex; flex-direction:column; gap:1px; min-width:0; flex:1; }
+.ov-meta {
+  font-size:.64rem; font-weight:600; text-transform:uppercase;
+  letter-spacing:.07em; color:var(--muted);
+}
+.ov-name { font-size:.95rem; font-weight:600; line-height:1.25; }
+.overview-row.winner .ov-name { color:var(--good); }
+.overview-row.applied .ov-meta { color:var(--good); }
+.dropMeal { padding:2px 9px; font-size:.72rem; flex-shrink:0; color:var(--muted); }
+.dropMeal:hover { color:var(--bad); border-color:var(--bad); }
+
+/* filters */
+.filter-bar { margin-bottom:14px; }
+.filter-bar input { width:100%; margin-bottom:8px; }
+.tag-filters { display:flex; flex-wrap:wrap; gap:5px; }
+.tagf { font-size:.76rem; padding:4px 10px; border-radius:999px; color:var(--muted); }
+.tagf.on { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+.tag-picker { display:flex; flex-wrap:wrap; gap:4px 12px; padding:6px 0; }
+.tag-opt {
+  font-size:.82rem; color:var(--text);
+  /* .inline centers vertically, which is fine for one-line text — but
+     "Kids' favourite" / "Batch cook" wrap to two lines, and centering the
+     checkbox against a two-line-tall block puts it visually mid-text. */
+  align-items:flex-start !important;
+}
+.tag-opt input[type=checkbox] { margin-top:2px; }
+
+/* settings */
+.card.pad { padding:14px 16px; }
+.person-row { border-bottom:1px solid var(--border); padding:7px 0; flex-wrap:wrap; }
+/* The row gained a vote-link and a regenerate button, which pushed it past
+   375px as one line — the name takes the full width and the controls wrap
+   underneath rather than overflowing the page. */
+.person-row .row-label { flex:1 1 100%; }
+.person-row .roleSel { flex:0 1 auto; }
+.person-row:last-of-type { border-bottom:none; }
+.person-row .delPerson { padding:2px 8px; font-size:.75rem; }
+.btn-link {
+  display:inline-block; background:var(--card); border:1px solid var(--border);
+  color:var(--text); padding:7px 13px; border-radius:8px; text-decoration:none; font-size:.85rem;
+}
+.btn-link:hover { border-color:var(--accent); }
+
+/* mobile */
+@media (max-width:560px) {
+  main { padding:14px 12px 0; }
+  /* Icon-only actions, and a smaller title. The date can only sit dead centre
+     while both outer grid tracks fit their content, and the widest of those is
+     the title — at desktop size it alone eats the room the centring needs. */
+  .actions .btn-label { display:none; }
+  .actions button, .actions .btn-link { padding:5px 7px; font-size:1rem; line-height:1; }
+  .actions { gap:5px; }
+  .block-head { gap:6px; }
+  .block-head h1 { font-size:1.15rem; white-space:nowrap; }
+  .block-head .week-range { font-size:.95rem; }
+  h1 { font-size:1.25rem; }
+  .day { padding:12px 13px; }
+  .qty { min-width:56px; font-size:.8rem; }
+  /* 90px clears the realistic worst case ("12 bottle each" measures 87px);
+     below that the label spills over the item name rather than wrapping. */
+  .extra-row .qty { width:90px; flex:0 0 90px; }
+  .grid-row { flex-wrap:wrap; }
+  .grid-row.ing .i-item { flex:1 1 100%; }
+  .modal { padding:10px 8px; }
+  .modal-card { padding:14px 14px 18px; }
+}
+
+.error-box {
+  background:var(--card); border:1px solid var(--bad); border-left-width:4px;
+  border-radius:12px; padding:16px 18px;
+}
+.error-box h2 { margin:0 0 8px; font-size:1.05rem; color:var(--bad); }
+.error-box pre {
+  white-space:pre-wrap; word-break:break-word; background:var(--bg);
+  border:1px solid var(--border); border-radius:8px; padding:10px;
+  font-size:.8rem; color:var(--text); margin:0 0 10px;
+}
+.error-box code { background:var(--bg); padding:2px 6px; border-radius:5px; font-size:.78rem; }
+.error-box button { margin-top:10px; }
+
+.login-gate { padding:60px 16px; text-align:center; max-width:360px; margin:0 auto; }
+.login-gate h1 { margin:0 0 6px; }
+.login-gate .subtitle { margin-bottom:24px; }
+.gate-people { display:flex; flex-direction:column; gap:10px; }
+.gate-person {
+  padding:14px; border-radius:12px; font-size:1.05rem; font-weight:600;
+  background:var(--card); border:1px solid var(--border); color:var(--text);
+}
+.gate-person:hover { border-color:var(--accent); }
+
+/* Fun theme — opt-in per person, from Settings. Brighter and rounder, but
+   still uses the same structure so nothing breaks; a parent who never
+   switches it on never sees it. */
+:root[data-fun-theme="1"] {
+  --bg:#1a1033; --card:#2a1a4a; --border:#4a3070; --text:#fff3fa;
+  --muted:#c9a8e8; --accent:#ff5fa2; --good:#3ee08a; --low:#ffc93c; --bad:#ff5f6d;
+}
+:root[data-fun-theme="1"] body { font-family:"Comic Sans MS", -apple-system, sans-serif; }
+:root[data-fun-theme="1"] .tabs { border-bottom-color:var(--border); }
+:root[data-fun-theme="1"] .tabs a.active { background:linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #7c4dff)); color:#fff; }
+:root[data-fun-theme="1"] .day, :root[data-fun-theme="1"] .card,
+:root[data-fun-theme="1"] .vote-row, :root[data-fun-theme="1"] .meal-card {
+  border-radius:18px; border-width:2px;
+}
+:root[data-fun-theme="1"] button.primary { background:linear-gradient(135deg,#ff5fa2,#7c4dff); border:none; }
+:root[data-fun-theme="1"] .vote-row.voted .vote-check { box-shadow:inset 0 0 0 2px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+:root[data-fun-theme="1"] h1::after { content:" 🎉"; }
+
+@media print {
+  body { background:#fff; color:#000; }
+  .no-print, .tabs, .block, .modal { display:none !important; }
+  .card { border:none; background:#fff; padding:0; }
+  .aisle h3 { color:#000; border-color:#999; }
+  .qty, .hint { color:#333; }
+  .tag { border:1px solid #999; color:#000; background:none; }
+}
+
+/* ---- Plan: today at a glance -------------------------------------------
+   The page is opened far more often to answer "what am I cooking tonight?"
+   than to edit anything, so today gets its own card at the top and the rest
+   of the week stays as a compact reference below it. */
+.today-card {
+  border:1px solid var(--accent); border-radius:14px; padding:13px 16px 15px;
+  background:color-mix(in srgb, var(--accent) 12%, transparent); margin-bottom:16px;
+}
+.today-when {
+  font-size:.68rem; text-transform:uppercase; letter-spacing:.07em;
+  color:var(--accent); font-weight:700; margin-bottom:5px;
+}
+.today-meal {
+  font-size:1.4rem; font-weight:700; line-height:1.2; color:var(--text);
+  background:none; border:none; padding:0; text-align:left; font-family:inherit; cursor:pointer;
+}
+.today-meal:hover { color:var(--accent); }
+.today-card.empty .today-meal {
+  font-size:1.05rem; font-weight:500; font-style:italic; color:var(--muted); cursor:default;
+}
+/* Lunch heads its own block on the today card, so the rule that used to sit
+   above the dinner's list moves here and does double duty as the divider. */
+.today-lunch {
+  font-size:.82rem; color:var(--muted); margin-top:12px;
+  border-top:1px solid var(--border); padding-top:10px;
+}
+.today-ings.sub { margin-top:4px; border-top:none; padding-top:0; }
+.today-ings.sub li { font-size:.82rem; }
+.today-lunch button { font-size:.82rem; }
+
+/* .day.simple is a column flex container, so a bare button stretches to the
+   full card width and reads like an empty input rather than a small action. */
+.addLunch { align-self:flex-start; margin-top:8px; padding:4px 10px; font-size:.72rem; }
+
+/* ---- offline notice ---------------------------------------------------- */
+.toast {
+  position:fixed; left:50%; bottom:20px; transform:translate(-50%, 140%);
+  max-width:min(420px, calc(100vw - 24px)); z-index:60;
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:11px 15px; font-size:.85rem; color:var(--text);
+  box-shadow:0 8px 26px rgba(0,0,0,.45); transition:transform .22s ease; text-align:center;
+}
+.toast.show { transform:translate(-50%, 0); }
+.toast.bad { border-color:var(--bad); }
+@media (max-width:560px) { .toast { bottom:calc(20px + env(safe-area-inset-bottom, 0px)); } }
+
+/* ---- Plan: swap days ---------------------------------------------------- */
+.swapDaySelect { flex:1; min-width:0; font-size:.82rem; padding:5px 7px; }
+
+/* ---- Shopping: whole-row tap target + trolley -------------------------- */
+/* A checkbox alone is a tiny, easy-to-miss target on a phone. The whole row
+   becomes the button — bordered like a card, with visible pressed/checked
+   states — while staying a native <label>, so tapping anywhere in it still
+   just toggles the checkbox with no extra JS. */
+.shop-row {
+  padding:9px 12px; margin:5px 0; border-radius:10px;
+  border:1px solid var(--border); background:var(--bg);
+  transition:background .15s ease, border-color .15s ease, opacity .28s ease, transform .28s ease;
+}
+.shop-row:active { background:color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+.shop-row:has(input:checked) {
+  border-color:color-mix(in srgb, var(--good) 45%, var(--border));
+  background:color-mix(in srgb, var(--good) 10%, var(--bg));
+}
+.aisle-items .shop-row:first-child { margin-top:8px; }
+
+.aisle.aisle-empty { display:none; }
+
+.trolley-card { margin-top:16px; }
+.trolley-heading { font-size:.92rem; margin:2px 0 2px; display:flex; align-items:center; gap:6px; }
+.trolley-heading #trolleyCount {
+  font-size:.72rem; color:var(--muted); background:var(--bg);
+  border-radius:999px; padding:1px 8px;
+}
+.trolley-card.hidden { display:none; }
+.trolley-item .shop-row { border-color:var(--border); background:var(--bg); opacity:.72; }
+.trolley-item .aisle-tag { font-size:.68rem; color:var(--muted); margin-left:6px; }
+
+/* fade+collapse out of the aisle list, fade+settle into the trolley (and the
+   reverse on undo) — 280ms, matched to the setTimeout in app.js */
+.row-leaving { opacity:0; transform:translateX(10px) scale(.98); }
+.row-entering { opacity:0; transform:translateY(-4px); }
+
+/* ---- in-app confirm / PIN pad -------------------------------------------
+   Replaces confirm()/alert()/prompt() throughout the app — native dialogs
+   block the page, can't be styled, and prompt() gives no guarantee of a
+   numeric keypad, which is the one place (PIN entry) that actually matters. */
+.modal-actions .danger { background:var(--bad); border-color:var(--bad); }
+
+.pin-dots { display:flex; gap:14px; justify-content:center; margin:18px 0 6px; }
+.pin-dot {
+  width:16px; height:16px; border-radius:50%; border:2px solid var(--border);
+  background:transparent; transition:background .12s ease, border-color .12s ease;
+}
+.pin-dot.filled { background:var(--accent); border-color:var(--accent); }
+.pin-dots.shake { animation:pin-shake .32s ease; }
+@keyframes pin-shake {
+  0%, 100% { transform:translateX(0); }
+  25% { transform:translateX(-8px); }
+  75% { transform:translateX(8px); }
+}
+.pin-error {
+  min-height:1.2em; text-align:center; color:var(--bad); font-size:.8rem;
+  margin:4px 0 0; opacity:0; transition:opacity .15s ease;
+}
+.pin-error.show { opacity:1; }
+.pin-keys {
+  display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;
+  max-width:260px; margin:18px auto 4px;
+}
+.pin-key {
+  padding:16px 0; font-size:1.3rem; font-weight:600; border-radius:12px;
+  background:var(--bg); border:1px solid var(--border); color:var(--text);
+}
+.pin-key:active { background:color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+
+.toast.good { border-color:var(--good); }
+
+/* ---- Plan: today's ingredients, inline -------------------------------- */
+.today-ings {
+  list-style:none; padding:0; margin:12px 0 0; border-top:1px solid var(--border); padding-top:10px;
+}
+.today-ings li { display:flex; gap:10px; padding:3px 0; font-size:.86rem; }
+.today-ings .pk-qty { min-width:70px; flex-shrink:0; color:var(--muted); font-variant-numeric:tabular-nums; }
+.today-ings-empty { margin:10px 0 0; font-size:.8rem; color:var(--muted); font-style:italic; }
+
+/* ---- meal ratings (anonymous) -------------------------------------------- */
+.meal-rating { display:flex; align-items:center; gap:10px; margin-top:6px; flex-wrap:wrap; }
+.rating-avg { font-size:.8rem; color:var(--text); font-variant-numeric:tabular-nums; }
+.rating-picker { display:inline-flex; gap:1px; }
+.star-btn {
+  background:none; border:none; padding:1px 2px; font-size:1rem; line-height:1;
+  color:var(--border); cursor:pointer;
+}
+.star-btn.on, .star-btn:hover { color:var(--low); }
+.star-btn:active { transform:scale(1.15); }
+
+/* ---- Vote: "need anything else" CTA -------------------------------------- */
+.extras-cta {
+  display:block; text-decoration:none; color:var(--text);
+  background:color-mix(in srgb, var(--good) 12%, transparent);
+}
+.extras-cta:hover { background:color-mix(in srgb, var(--good) 18%, transparent); }
+
+/* ---- extra-request page --------------------------------------------------- */
+.chip-row { display:flex; flex-wrap:wrap; gap:8px; }
+.chip {
+  border-radius:999px; padding:6px 14px; font-size:.85rem;
+  background:var(--bg); border:1px solid var(--border); color:var(--text);
+}
+.chip:active { background:color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+
+/* ---- weekly cycle strip -------------------------------------------------
+   Vote -> Plan -> Shop, the order things actually happen in. The nav bar is
+   ordered for daily use instead (Plan first), so this carries the sequence
+   without fighting that — current step highlighted, all three tappable. */
+.cycle-strip { display:flex; gap:6px; margin:10px 0 14px; }
+.cycle-step {
+  flex:1; text-align:center; text-decoration:none; padding:7px 4px;
+  font-size:.74rem; font-weight:600; letter-spacing:.02em;
+  border-radius:8px; border:1px solid var(--border);
+  background:var(--card); color:var(--muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.cycle-step.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+.cycle-step:not(.on):hover { border-color:var(--accent); color:var(--text); }
+
+/* "you've finished this step, here's the next one" handoff */
+.next-step {
+  display:block; text-decoration:none; color:var(--text); margin-top:16px;
+  border-color:color-mix(in srgb, var(--good) 45%, var(--border));
+  background:color-mix(in srgb, var(--good) 10%, transparent);
+}
+.next-step:hover { border-color:var(--good); }
+
+/* Link from Shopping to the usual-items page */
+.regulars-link { display:block; text-decoration:none; color:var(--text); }
+.regulars-link:hover { background:color-mix(in srgb, var(--accent) 17%, transparent); }
+
+/* Extras row on a phone: stepper + qty + name fill the first line, and the
+   two labelled action buttons wrap to a second line as a pair. Before this
+   they fought the item name for the same ~12px of leftover space and the
+   text overlapped the buttons — the row got too wide when the bare 🗑/✏️
+   icons gained visible labels. */
+.extra-actions { display:flex; gap:6px; flex-shrink:0; margin-left:auto; }
+@media (max-width:560px) {
+  .extra-row { flex-wrap:wrap; row-gap:8px; }
+  .extra-row .shop-item { flex:1 1 120px; }
+  .extra-row .qty { width:78px; flex:0 0 78px; font-size:.76rem; }
+}
+
+/* ---- Plan: week as a timeline -------------------------------------------
+   Structural cues taken from Structured (Apple Design Award winner): no
+   borders at all, a vertical spine threading circular colour badges, and
+   hierarchy carried by weight/size/space instead of boxes. Colour does the
+   scanning work the borders used to — you find the day by hue first. Their
+   palette is light + coral; this keeps our dark theme and encodes meal type
+   in the badge rather than copying their colours. */
+.timeline { list-style:none; margin:6px 0 0; padding:0; position:relative; }
+.timeline::before {
+  content:""; position:absolute; left:21px; top:24px; bottom:26px; width:2px;
+  background:var(--border); border-radius:1px;
+}
+.tl-day { display:flex; gap:14px; padding:0 0 20px; position:relative; }
+.tl-badge {
+  flex:0 0 44px; width:44px; height:44px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:.95rem; font-weight:700; color:#fff;
+  position:relative; z-index:1; background:var(--badge, var(--border));
+  /* ring in the page colour so the spine appears to pass behind the badge */
+  box-shadow:0 0 0 4px var(--bg);
+}
+.tl-badge[data-kind="proper"]   { --badge:#4f7fe8; }
+.tl-badge[data-kind="light"]    { --badge:#2f9e6b; }
+.tl-badge[data-kind="pudding"]  { --badge:#9a5fc8; }
+.tl-badge[data-kind="takeaway"] { --badge:#c8873a; }
+.tl-badge[data-kind="none"] {
+  background:transparent; color:var(--muted);
+  box-shadow:0 0 0 4px var(--bg), inset 0 0 0 2px var(--border);
+}
+.tl-day.is-today .tl-badge { box-shadow:0 0 0 4px var(--bg), 0 0 0 7px color-mix(in srgb, var(--accent) 55%, transparent); }
+
+.tl-body { flex:1; min-width:0; padding-top:1px; }
+.tl-meta {
+  margin:0 0 2px; font-size:.68rem; font-weight:600;
+  text-transform:uppercase; letter-spacing:.07em; color:var(--muted);
+}
+.tl-today { color:var(--accent); }
+.tl-title { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:1.05rem; font-weight:600; }
+.tl-title .simple-meal { font-size:1.05rem; font-weight:600; }
+.tl-title .simple-meal.none { font-weight:400; color:var(--muted); font-style:italic; }
+.tl-title .dayMealSelect { flex:1; min-width:0; font-size:.86rem; }
+.tl-title .unassign { flex-shrink:0; }
+
+/* Days already eaten. Smaller, quieter and (unless historic edits are turned
+   on) with no controls at all, so the eye slides straight past them to today.
+   The badge keeps its 44px slot so the spine still runs dead centre. */
+/* Folded away by default — see .past-toggle. */
+.timeline.past-hidden .tl-day.is-past { display:none; }
+.past-toggle {
+  background:none; border:none; color:var(--muted); font-size:.8rem;
+  padding:6px 4px; margin:2px 0 4px;
+}
+.past-toggle:hover { color:var(--text); }
+
+.tl-day.is-past { padding-bottom:10px; opacity:.5; }
+.tl-day.is-past .tl-badge {
+  flex-basis:30px; width:30px; height:30px; margin:2px 7px 0; font-size:.78rem;
+  filter:saturate(.45);
+}
+.tl-day.is-past .tl-meta { font-size:.6rem; margin-bottom:0; }
+.tl-day.is-past .tl-title,
+.tl-day.is-past .tl-title .simple-meal { font-size:.86rem; font-weight:500; }
+.tl-day.is-past .tl-extras { margin-top:4px; font-size:.8rem; }
+/* Today is the anchor of the page — give it air after the compressed history. */
+.tl-day.is-past + .tl-day.is-today { padding-top:6px; }
+
+.tl-extras { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin-top:8px; }
+.tl-ctl { display:flex; align-items:center; gap:6px; min-width:0; }
+.tl-ctl > span { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); white-space:nowrap; }
+.tl-ctl select { font-size:.8rem; padding:4px 6px; min-width:0; max-width:190px; }
+/* Read-only days carry lunch inline after the dinner, so a finished day is one
+   line. Lighter weight than the dinner it trails, and it wraps as a unit. */
+.tl-lunch {
+  margin:0; font-size:.8rem; font-weight:400; color:var(--muted);
+  white-space:nowrap; display:inline-flex; align-items:baseline; gap:4px;
+}
+.tl-lunch button { font-size:.8rem; font-weight:400; }
+.tl-day.is-past .tl-lunch, .tl-day.is-past .tl-lunch button { font-size:.76rem; }
+
+/* Today's hero: tinted panel rather than another bordered box */
+.today-card {
+  border:none; border-radius:16px; padding:15px 18px 17px; margin-bottom:20px;
+  background:linear-gradient(140deg, color-mix(in srgb, var(--accent) 20%, var(--card)), var(--card) 70%);
+}
+.today-card.empty { background:var(--card); }
+.today-meal { font-size:1.5rem; }
+
+/* ---- Shopping in the Plan page's vocabulary ------------------------------
+   Borders off; the row is still the whole tap target (it's a <label>), but it
+   now reads as a line item rather than a boxed control. The big outline
+   circle is what signals "tappable" — same device Structured uses for task
+   completion, and a far bigger target than the 17px square it replaces. */
+.shop-row {
+  border:none; background:none; padding:11px 6px; margin:0;
+  align-items:center; gap:12px; border-radius:10px;
+}
+.aisle-items .shop-row:first-child { margin-top:6px; }
+.shop-row:active { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+.shop-row:has(input:checked) { background:none; }
+
+.shop-row input[type=checkbox] {
+  appearance:none; -webkit-appearance:none;
+  width:26px; height:26px; min-width:26px; border-radius:50%;
+  border:2px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  background:transparent; position:relative; cursor:pointer;
+  transition:background .15s ease, border-color .15s ease;
+}
+.shop-row input[type=checkbox]:checked { background:var(--good); border-color:var(--good); }
+.shop-row input[type=checkbox]:checked::after {
+  content:"✓"; position:absolute; inset:0; display:flex;
+  align-items:center; justify-content:center; color:#fff; font-size:.8rem; font-weight:700;
+}
+
+.shop-row .qty { align-self:flex-start; padding-top:1px; }
+.shop-item { display:flex; flex-direction:column; gap:2px; }
+.shop-name { font-weight:600; font-size:.98rem; line-height:1.25; }
+.shop-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; font-size:.74rem; color:var(--muted); }
+.shop-meta .hint { display:inline; }
+.shop-meta .tag { margin-left:0; }
+.shop-row input:checked ~ .qty,
+.shop-row input:checked ~ .shop-item .shop-name { color:var(--muted); text-decoration:line-through; }
+.shop-row input:checked ~ .shop-item .shop-meta { opacity:.6; }
+
+/* Aisle heading: colour dot instead of a rule under it */
+.aisle h3 { border-bottom:none; padding-bottom:0; display:flex; align-items:center; gap:7px; margin:14px 0 2px; }
+.aisle-dot { width:9px; height:9px; border-radius:50%; background:var(--dot, var(--muted)); flex-shrink:0; }
+.trolley-item .shop-row { background:none; opacity:.6; }
+
+/* Nothing left to buy — say so rather than leaving an empty card */
+.all-done { text-align:center; padding:26px 16px 22px; }
+.all-done-tick {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:52px; height:52px; border-radius:50%; background:var(--good);
+  color:#fff; font-size:1.5rem; font-weight:700; margin-bottom:10px;
+}
+.all-done p { margin:0; color:var(--muted); font-size:.9rem; }
+
+/* Very narrow phones: one more notch so the title still fits beside a centred
+   date without wrapping the header onto a second line. */
+@media (max-width:345px) {
+  .block-head h1 { font-size:1.02rem; }
+  .block-head .week-range { font-size:.88rem; }
+}

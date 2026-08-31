@@ -1,0 +1,14 @@
+services:
+  mealplan:
+    build: .
+    container_name: mealplan
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    volumes:
+      # Single SQLite file. Put this somewhere restic will pick it up —
+      # see the backup note in README.md.
+      - ./data:/data
+    environment:
+      - MEALPLAN_DB=/data/mealplan.db
+      - PORT=8080

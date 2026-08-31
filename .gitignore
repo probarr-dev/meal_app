@@ -1,0 +1,6 @@
+data/
+__pycache__/
+*.pyc
+deploy.sh
+OPUS_REVIEW_PROMPT.md
+.DS_Store
