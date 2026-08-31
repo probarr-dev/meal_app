@@ -94,6 +94,11 @@ def migrate(conn):
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
+        # A non-real "person" that ships with the example meal library so
+        # seed content can have a "who's it for" without hardcoding an
+        # actual name — never shown at login or in Settings' Family list,
+        # only as an option on meals/extras.
+        ("person", "is_placeholder", "INTEGER DEFAULT 0"),
         # A second, optional meal slot per day — now specifically for Kids
         # Lunches (holiday weeks), sourced from meals tagged 'kids_lunch'
         # rather than the general library.
@@ -328,9 +333,11 @@ def migrate(conn):
     # Someone has to be able to open the admin screen the first time. If no
     # one is marked admin yet, the earliest parent gets it — adjustable
     # afterwards from Settings by any existing admin.
-    if not conn.execute("SELECT 1 FROM person WHERE is_admin=1").fetchone():
+    if not conn.execute(
+            "SELECT 1 FROM person WHERE is_admin=1 AND is_placeholder=0").fetchone():
         first_parent = conn.execute(
-            "SELECT id FROM person WHERE role='parent' ORDER BY id LIMIT 1").fetchone()
+            "SELECT id FROM person WHERE role='parent' AND is_placeholder=0 "
+            "ORDER BY id LIMIT 1").fetchone()
         if first_parent:
             conn.execute("UPDATE person SET is_admin=1 WHERE id=?", (first_parent["id"],))
 
@@ -808,6 +815,10 @@ class Handler(SimpleHTTPRequestHandler):
                 # week in hand is finished with — anything added from then on
                 # is for the next shop, not this one.
                 "shopDone": shop_done(conn, this_id),
+                # A fresh clone: nothing but the placeholder "Family" person
+                # exists yet. The client shows the setup wizard instead of
+                # the normal login gate until this flips false.
+                "needsSetup": not any(not p["is_placeholder"] for p in people),
                 "votingOpen": voting_open(conn, vote_id),
                 "weekStartDow": get_week_start_dow(conn),
                 "protectedWeekIds": sorted(protected_week_ids(conn)),
@@ -1597,10 +1608,20 @@ class Handler(SimpleHTTPRequestHandler):
                     conn.execute(f"UPDATE person SET {sets} WHERE id=?", (*vals, b["id"]))
                 pid = b["id"]
             else:
-                if not admin:
+                # A brand-new install has no admin to authorise the very first
+                # real person — the household's own setup wizard is the one
+                # legitimate case where this is allowed through anyway, and
+                # that first person becomes admin+parent on the spot so
+                # there's someone who can add everyone else normally from
+                # then on. Guarded on the actual DB state, not a client flag,
+                # so it can't be replayed once a real person already exists.
+                first_ever = conn.execute(
+                    "SELECT COUNT(*) c FROM person WHERE is_placeholder=0").fetchone()["c"] == 0
+                if not admin and not first_ever:
                     return self.send_json({"error": "Only the household admin can add people."}, 403)
-                cur = conn.execute("INSERT INTO person(name,role) VALUES (?,?)",
-                                   (b["name"], b.get("role", "child")))
+                role = "parent" if first_ever else b.get("role", "child")
+                cur = conn.execute("INSERT INTO person(name,role,is_admin) VALUES (?,?,?)",
+                                   (b["name"], role, 1 if first_ever else 0))
                 pid = cur.lastrowid
             conn.commit()
             p = conn.execute("SELECT * FROM person WHERE id=?", (pid,)).fetchone()
