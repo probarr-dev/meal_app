@@ -124,3 +124,18 @@ CREATE TABLE IF NOT EXISTS meal_request (
   person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
   PRIMARY KEY (week_id, meal_id, person_id)
 );
+
+CREATE TABLE IF NOT EXISTS meal_photo (
+  meal_id INTEGER PRIMARY KEY REFERENCES meal(id) ON DELETE CASCADE,
+  mime    TEXT NOT NULL,
+  data    BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS extra_log (
+  id         INTEGER PRIMARY KEY,
+  person_id  INTEGER REFERENCES person(id) ON DELETE SET NULL,
+  item       TEXT NOT NULL,
+  week_id    INTEGER,
+  action     TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);

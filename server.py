@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Family meal planner. Python stdlib + SQLite only — no dependencies to rot."""
 
+import base64
 import hashlib
 import json
 import math
@@ -109,6 +110,7 @@ def migrate(conn):
         # nothing hidden. 'shopping' = the trolley phase, entered by an
         # explicit tap once someone's actually heading out.
         ("week", "shopping_phase", "TEXT DEFAULT 'pantry'"),
+        ("week", "shop_closed", "INTEGER DEFAULT 0"),
         # How many of an extra to get this particular week — "2 juice"
         # instead of the household default of 1 — without changing what
         # future weeks default to.
@@ -493,6 +495,10 @@ def is_admin(conn, person_id):
     return bool(row and row["is_admin"])
 
 
+DATA_VERSION = 0
+BUILD_ID = str(int(__import__("time").time()))
+
+
 def hash_pin(pin, salt=None):
     salt = salt or os.urandom(8).hex()
     h = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), 100_000).hex()
@@ -537,6 +543,44 @@ def fmt_qty(amount, unit):
     if amount == 1:
         return f"{amount:g} {unit}"
     return f"{amount:g} {PLURALS.get(unit, unit + 's')}"
+
+
+def log_extra(conn, person_id, item, week_id, action):
+    conn.execute("INSERT INTO extra_log(person_id,item,week_id,action) VALUES (?,?,?,?)",
+                 (person_id or None, item, week_id, action))
+
+
+def sync_healthy_points(conn):
+    """Healthy-vote points are derived, not one-off: re-apply the current
+    healthy tags to every finalised week, so re-tagging a meal fixes history."""
+    healthy = {t.strip() for t in ((conn.execute(
+        "SELECT value FROM config WHERE key='healthy_tags'").fetchone() or {"value": ""})["value"] or "").split(",")
+        if t.strip()}
+    want = {}
+    for r in rows(conn.execute("""
+            SELECT v.person_id, v.week_id, v.meal_id, m.name, m.tags
+            FROM meal_vote v
+            JOIN week w ON w.id=v.week_id AND w.confirmed=1
+            JOIN meal m ON m.id=v.meal_id
+            JOIN person p ON p.id=v.person_id AND p.role!='parent'
+            WHERE EXISTS (SELECT 1 FROM week_meal wm WHERE wm.week_id=v.week_id AND wm.meal_id=v.meal_id)
+               OR EXISTS (SELECT 1 FROM week_day wd WHERE wd.week_id=v.week_id
+                          AND v.meal_id IN (wd.meal_id, wd.lunch_meal_id))""")):
+        if healthy & set((r["tags"] or "").split(",")):
+            want[(r["person_id"], r["week_id"], r["meal_id"])] = r["name"]
+    have = {(r["person_id"], r["week_id"], r["dow"]): (r["id"], r["tags"]) for r in rows(conn.execute(
+        """SELECT l.id, l.person_id, l.week_id, l.dow, m.tags FROM points_ledger l
+           LEFT JOIN meal m ON m.id=l.dow WHERE l.slot='poll'"""))}
+    for k, name in want.items():
+        if k not in have:
+            conn.execute("""INSERT INTO points_ledger(person_id,week_id,dow,slot,delta,reason)
+                            VALUES (?,?,?,'poll',1,?)""", (k[0], k[1], k[2], f"voted for {name}"))
+    # Only take a point back when the meal itself is no longer healthy —
+    # a meal later dropped from the shortlist still earned its point.
+    for k, (rid, tags) in have.items():
+        if k not in want and not (healthy & set((tags or "").split(","))):
+            conn.execute("DELETE FROM points_ledger WHERE id=?", (rid,))
+    conn.commit()
 
 
 def shop_done(conn, week_id):
@@ -724,6 +768,22 @@ class Handler(SimpleHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if not u.path.startswith("/api/"):
             return super().do_GET()
+        if u.path == "/api/meal-photo":
+            with db() as conn:
+                r = conn.execute("SELECT mime, data FROM meal_photo WHERE meal_id=?",
+                                 (int(urllib.parse.parse_qs(u.query)["id"][0]),)).fetchone()
+            if not r:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200)
+            self.send_header("Content-Type", r["mime"])
+            self.send_header("Content-Length", str(len(r["data"])))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers(); self.wfile.write(r["data"]); return
+        if u.path == "/api/version":
+            with db() as conn:
+                pending = conn.execute(
+                    "SELECT COUNT(*) c FROM extra_request WHERE status='pending'").fetchone()["c"]
+            return self.send_json({"v": DATA_VERSION, "pending": pending, "build": BUILD_ID})
         q = urllib.parse.parse_qs(u.query)
         try:
             with db() as conn:
@@ -744,6 +804,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": "That request wasn't valid JSON."}, 400)
         try:
             with db() as conn:
+                global DATA_VERSION
+                DATA_VERSION += 1
                 return self.api_post(conn, u.path, body)
         except (KeyError, ValueError, IndexError):
             return self.send_json({"error": "That request was missing something or malformed."}, 400)
@@ -788,7 +850,16 @@ class Handler(SimpleHTTPRequestHandler):
             # such expiry — a parent setting it right now is never stale by
             # definition — but it clears itself the moment that week is
             # confirmed, so it can't outlive its own reason for existing.
-            vote_id = next_id
+            # Default target: the earliest week still waiting for a plan. If
+            # this week was never confirmed (voting ran late), the meals are
+            # for THIS week — pointing votes at next week is what stranded a
+            # whole round of votes and a plan on the wrong week.
+            # Next week's vote only opens once this week is planned AND its shop
+            # is marked done — otherwise kids think they're voting/adding for
+            # the shop that's still in progress.
+            this_closed = (conn.execute("SELECT shop_closed FROM week WHERE id=?", (this_id,))
+                           .fetchone() or {"shop_closed": 0})["shop_closed"]
+            vote_id = next_id if (not voting_open(conn, this_id) and this_closed) else this_id
             override_row = conn.execute(
                 "SELECT value FROM config WHERE key='vote_week_override'").fetchone()
             if override_row:
@@ -937,8 +1008,9 @@ class Handler(SimpleHTTPRequestHandler):
             # Meals finalized onto this week's shortlist but not yet assigned
             # to a day, plus the separate hand-curated Lunch list.
             wid = int(q["id"][0])
-            assigned = {r["meal_id"] for r in rows(conn.execute(
-                "SELECT meal_id FROM week_day WHERE week_id=? AND meal_id IS NOT NULL", (wid,)))}
+            assigned = {m for r in rows(conn.execute(
+                "SELECT meal_id, lunch_meal_id FROM week_day WHERE week_id=?", (wid,)))
+                for m in (r["meal_id"], r["lunch_meal_id"]) if m}
             chosen = rows(conn.execute("""
                 SELECT m.id, m.name FROM week_meal wm JOIN meal m ON m.id=wm.meal_id
                 WHERE wm.week_id=? AND m.deleted_at IS NULL ORDER BY m.name""", (wid,)))
@@ -985,7 +1057,8 @@ class Handler(SimpleHTTPRequestHandler):
             out = rows(conn.execute("""
                 SELECT m.*, (SELECT COUNT(*) FROM week_day wd WHERE wd.meal_id=m.id) AS times_used,
                        (SELECT ROUND(AVG(stars), 1) FROM meal_rating WHERE meal_id=m.id) AS rating_avg,
-                       (SELECT COUNT(*) FROM meal_rating WHERE meal_id=m.id) AS rating_count
+                       (SELECT COUNT(*) FROM meal_rating WHERE meal_id=m.id) AS rating_count,
+                       EXISTS(SELECT 1 FROM meal_photo WHERE meal_id=m.id) AS has_photo
                 FROM meal m WHERE m.deleted_at IS NULL ORDER BY m.name"""))
             for m in out:
                 m["ingredients"] = rows(conn.execute(
@@ -1018,7 +1091,7 @@ class Handler(SimpleHTTPRequestHandler):
                                 WHERE we.extra_id = e.id AND we.week_id <> ?) AS prior_weeks
                        FROM extra e
                        LEFT JOIN person p ON p.id = e.person_id
-                       ORDER BY e.recurring DESC, prior_weeks DESC, e.item COLLATE NOCASE""", (wid,)))
+                       ORDER BY e.item COLLATE NOCASE""", (wid,)))
             else:
                 extras = rows(conn.execute(
                     """SELECT e.*, p.name AS person,
@@ -1026,7 +1099,7 @@ class Handler(SimpleHTTPRequestHandler):
                                 WHERE we.extra_id = e.id) AS prior_weeks
                        FROM extra e
                        LEFT JOIN person p ON p.id = e.person_id
-                       ORDER BY e.recurring DESC, prior_weeks DESC, e.item COLLATE NOCASE"""))
+                       ORDER BY e.item COLLATE NOCASE"""))
             if wid:
                 this_week = {r["extra_id"]: r["qty"] for r in rows(conn.execute(
                     "SELECT extra_id, qty FROM week_extra WHERE week_id=?", (wid,)))}
@@ -1074,10 +1147,29 @@ class Handler(SimpleHTTPRequestHandler):
                 aisles.setdefault(r["item"].strip().title(), r["aisle"])
             return self.send_json({"names": sorted(names), "aisleFor": aisles})
 
+        if path == "/api/extra-log":
+            me_id = int(q.get("person", ["0"])[0] or 0)
+            sql = """SELECT l.*, p.name AS person_name, w.start_date FROM extra_log l
+                     LEFT JOIN person p ON p.id=l.person_id LEFT JOIN week w ON w.id=l.week_id"""
+            if is_parent(conn, me_id):
+                out = rows(conn.execute(sql + " ORDER BY l.id DESC LIMIT 300"))
+            else:
+                out = rows(conn.execute(sql + " WHERE l.person_id=? ORDER BY l.id DESC LIMIT 300", (me_id,)))
+            return self.send_json({"log": out})
+
         if path == "/api/rewards":
+            sync_healthy_points(conn)
             person = q.get("person", [""])[0]
+            history = rows(conn.execute("""
+                SELECT l.person_id, p.name AS person_name, l.delta, l.reason,
+                       COALESCE(w.start_date, date(l.created_at)) AS when_date
+                FROM points_ledger l JOIN person p ON p.id=l.person_id
+                LEFT JOIN week w ON w.id=l.week_id
+                ORDER BY when_date DESC, l.id DESC"""))
             balances = {r["person_id"]: r["bal"] for r in rows(conn.execute(
                 "SELECT person_id, SUM(delta) bal FROM points_ledger GROUP BY person_id"))}
+            earned = {r["person_id"]: r["e"] for r in rows(conn.execute(
+                "SELECT person_id, SUM(delta) e FROM points_ledger WHERE delta>0 GROUP BY person_id"))}
             catalog = rows(conn.execute("SELECT * FROM reward WHERE active=1 ORDER BY points_cost"))
             requests = rows(conn.execute("""
                 SELECT rd.*, p.name AS person_name, r.name AS reward_name, r.points_cost
@@ -1088,6 +1180,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({
                 "balances": balances, "catalog": catalog, "requests": requests,
                 "myBalance": balances.get(int(person), 0) if person else 0,
+                "earned": earned,
+                "history": history,
+                "myEarned": earned.get(int(person), 0) if person else 0,
                 "healthyTags": [t for t in healthy_tags.split(",") if t],
             })
 
@@ -1103,6 +1198,16 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json({"error": "not found"}, 404)
 
     def api_post(self, conn, path, b):
+        if path in ("/api/extra", "/api/extra/set-qty", "/api/extra-request", "/api/extra-request/set") and b.get("week_id"):
+            wk = conn.execute("SELECT shop_closed FROM week WHERE id=?", (b["week_id"],)).fetchone()
+            if wk and wk["shop_closed"]:
+                return self.send_json({"error": "That week's shop is marked done — nothing more can be added to it."}, 400)
+
+        if path == "/api/week/shop-close":
+            conn.execute("UPDATE week SET shop_closed=? WHERE id=?", (1 if b.get("closed") else 0, b["week_id"]))
+            conn.commit()
+            return self.send_json({"ok": True})
+
         if path == "/api/shop-tick":
             conn.execute("""INSERT INTO shop_tick(week_id,item,checked) VALUES (?,?,?)
                             ON CONFLICT(week_id,item) DO UPDATE SET checked=excluded.checked""",
@@ -1286,6 +1391,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True, "vetoed": False})
             if existing:
                 return self.send_json({"error": "Only one veto per week — undo your other one first."}, 400)
+            if conn.execute("SELECT 1 FROM meal_vote WHERE week_id=? AND meal_id=?",
+                            (b["week_id"], b["meal_id"])).fetchone():
+                return self.send_json({"error": "Someone's already voted for this one, so it can't be vetoed."}, 400)
             conn.execute("INSERT INTO veto(week_id,person_id,dow,meal_id) VALUES (?,?,0,?)",
                          (b["week_id"], b["person_id"], b["meal_id"]))
             conn.commit()
@@ -1392,8 +1500,10 @@ class Handler(SimpleHTTPRequestHandler):
             # shopped for — decoupled from today's actual date, since the
             # weekly shop happens Friday evening/Saturday morning, not
             # necessarily right on the calendar boundary.
-            if not is_parent(conn, b.get("actor_id")):
-                return self.send_json({"error": "Only a parent can do that."}, 403)
+            # Retired: shopping on Friday for the week starting Saturday made
+            # this skip the family straight past the week they were about to
+            # eat. The calendar and the "lock list" step handle it now.
+            return self.send_json({"error": "Not needed any more — the week moves on by itself."}, 410)
             conn.execute("""INSERT INTO config(key,value) VALUES ('active_week_id',?)
                             ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (str(b["week_id"]),))
             conn.commit()
@@ -1456,6 +1566,8 @@ class Handler(SimpleHTTPRequestHandler):
                 cur = conn.execute("INSERT OR IGNORE INTO week_extra(week_id,extra_id) VALUES (?,?)",
                                    (b["week_id"], eid))
                 added_to_week = cur.rowcount > 0
+                if added_to_week:
+                    log_extra(conn, b.get("by"), b["item"], b["week_id"], "added")
             conn.commit()
             return self.send_json({"id": eid, "addedToWeek": added_to_week,
                                    "alreadyOnList": bool(b.get("week_id")) and not added_to_week
@@ -1471,6 +1583,7 @@ class Handler(SimpleHTTPRequestHandler):
                             VALUES (?,?,?,?,?,?)""",
                          (b["person_id"], item, float(b.get("amount") or 1),
                           b.get("unit") or "unit", b.get("aisle") or "Household", b["week_id"]))
+            log_extra(conn, b["person_id"], item, b["week_id"], "asked for")
             conn.commit()
             return self.send_json({"ok": True})
 
@@ -1494,12 +1607,16 @@ class Handler(SimpleHTTPRequestHandler):
                         """INSERT INTO extra(item,aisle,amount,unit,use_count) VALUES (?,?,?,?,1)""",
                         (req["item"], req["aisle"], req["amount"], req["unit"]))
                     eid = cur.lastrowid
-                conn.execute("INSERT OR IGNORE INTO week_extra(week_id,extra_id) VALUES (?,?)",
-                             (req["week_id"], eid))
+                n = max(1, int(req["amount"] or 1)) if existing else 1
+                conn.execute("""INSERT INTO week_extra(week_id,extra_id,qty) VALUES (?,?,?)
+                                ON CONFLICT(week_id,extra_id) DO UPDATE SET qty=MAX(qty, excluded.qty)""",
+                             (req["week_id"], eid, n))
                 conn.execute("""UPDATE extra_request SET status='approved',
                                 resolved_at=datetime('now'), resolved_by=? WHERE id=?""",
                              (b["resolver_id"], b["id"]))
+                log_extra(conn, req["person_id"], req["item"], req["week_id"], "request approved")
             else:
+                log_extra(conn, req["person_id"], req["item"], req["week_id"], "request declined")
                 conn.execute("""UPDATE extra_request SET status='denied',
                                 resolved_at=datetime('now'), resolved_by=? WHERE id=?""",
                              (b["resolver_id"], b["id"]))
@@ -1556,7 +1673,31 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
+        if path == "/api/extra-request/set":
+            # Kids use the same +/- as parents, but it only ever changes their
+            # own pending request (max 3) — a parent still approves it.
+            ex = conn.execute("SELECT * FROM extra WHERE id=?", (b["extra_id"],)).fetchone()
+            if not ex:
+                return self.send_json({"error": "Not a real item."}, 400)
+            qty = max(0, min(3, int(b.get("qty", 0))))
+            pend = conn.execute("""SELECT id FROM extra_request WHERE person_id=? AND week_id=?
+                                   AND item=? COLLATE NOCASE AND status='pending'""",
+                                (b["person_id"], b["week_id"], ex["item"])).fetchone()
+            if pend and qty == 0:
+                conn.execute("DELETE FROM extra_request WHERE id=?", (pend["id"],))
+            elif pend:
+                conn.execute("UPDATE extra_request SET amount=? WHERE id=?", (qty, pend["id"]))
+            elif qty:
+                conn.execute("""INSERT INTO extra_request(person_id,item,amount,unit,aisle,week_id)
+                                VALUES (?,?,?,?,?,?)""",
+                             (b["person_id"], ex["item"], qty, ex["unit"], ex["aisle"], b["week_id"]))
+            log_extra(conn, b["person_id"], ex["item"], b["week_id"], f"asked for {qty}" if qty else "cancelled ask")
+            conn.commit()
+            return self.send_json({"ok": True, "qty": qty})
+
         if path == "/api/extra/set-qty":
+            if not is_parent(conn, b.get("by")):
+                return self.send_json({"error": "Ask a grown-up — use the ask button instead."}, 403)
             # The +/- stepper: how many of this item this particular week —
             # "2 juice" instead of the household default of 1 — without
             # touching what future weeks default to. 0 or below removes it
@@ -1570,6 +1711,8 @@ class Handler(SimpleHTTPRequestHandler):
                                 ON CONFLICT(week_id,extra_id) DO UPDATE SET qty=excluded.qty""",
                              (wid, eid, qty))
                 conn.execute("UPDATE extra SET use_count = use_count + 1 WHERE id=?", (eid,))
+            name = (conn.execute("SELECT item FROM extra WHERE id=?", (eid,)).fetchone() or {"item": "?"})["item"]
+            log_extra(conn, b.get("by"), name, wid, f"set to {qty}" if qty > 0 else "removed")
             conn.commit()
             return self.send_json({"ok": True})
 
@@ -1677,7 +1820,32 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
+        if path == "/api/redemption/grant":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can redeem rewards."}, 403)
+            bal = conn.execute("SELECT COALESCE(SUM(delta),0) b FROM points_ledger WHERE person_id=?",
+                               (b["person_id"],)).fetchone()["b"]
+            reward = conn.execute("SELECT * FROM reward WHERE id=?", (b["reward_id"],)).fetchone()
+            if not reward:
+                return self.send_json({"error": "Not a real reward."}, 400)
+            if bal < reward["points_cost"]:
+                return self.send_json({"error": f"Needs {reward['points_cost']} points, only has {bal}."}, 400)
+            conn.execute("""INSERT INTO redemption(person_id,reward_id,status,budget_gbp,note,resolved_at,resolved_by)
+                            VALUES (?,?,'approved',?,?,datetime('now'),?)""",
+                         (b["person_id"], b["reward_id"], b.get("budget_gbp"), b.get("note", ""), b["actor_id"]))
+            conn.execute("INSERT INTO points_ledger(person_id,delta,reason) VALUES (?,?,?)",
+                         (b["person_id"], -reward["points_cost"],
+                          f"redeemed: {reward['name']}" + (f" — {b['note']}" if b.get("note") else "")))
+            if b.get("swap_week_id") and b.get("swap_meal_id") is not None and b.get("swap_dow") is not None:
+                conn.execute("INSERT OR IGNORE INTO week_day(week_id,dow) VALUES (?,?)",
+                             (b["swap_week_id"], b["swap_dow"]))
+                conn.execute("UPDATE week_day SET meal_id=? WHERE week_id=? AND dow=?",
+                             (b["swap_meal_id"], b["swap_week_id"], b["swap_dow"]))
+            conn.commit()
+            return self.send_json({"ok": True})
+
         if path == "/api/redemption/request":
+            return self.send_json({"error": "Ask a parent — they redeem rewards now."}, 403)
             bal = conn.execute("SELECT SUM(delta) b FROM points_ledger WHERE person_id=?",
                                (b["person_id"],)).fetchone()["b"] or 0
             reward = conn.execute("SELECT * FROM reward WHERE id=?", (b["reward_id"],)).fetchone()
@@ -1748,6 +1916,29 @@ class Handler(SimpleHTTPRequestHandler):
             if len(pin) != 4:
                 return self.send_json({"error": "PIN must be 4 digits."}, 400)
             conn.execute("UPDATE person SET pin_hash=?, pin_default=0 WHERE id=?", (hash_pin(pin), target))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/meal-photo":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can change meal photos."}, 403)
+            if not b.get("data"):
+                conn.execute("DELETE FROM meal_photo WHERE meal_id=?", (b["meal_id"],))
+            else:
+                head, data = b["data"].split(",", 1)
+                mime = head[5:].split(";")[0]
+                if mime not in ("image/jpeg", "image/png", "image/webp"):
+                    return self.send_json({"error": "That isn't a photo."}, 400)
+                conn.execute("INSERT OR REPLACE INTO meal_photo(meal_id,mime,data) VALUES (?,?,?)",
+                             (b["meal_id"], mime, base64.b64decode(data)))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/person/reset-pin":
+            if not is_parent(conn, b.get("admin_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            conn.execute("UPDATE person SET pin_hash=?, pin_default=1 WHERE id=?",
+                         (hash_pin("0000"), b["id"]))
             conn.commit()
             return self.send_json({"ok": True})
 

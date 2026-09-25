@@ -694,9 +694,12 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
   max-width:min(420px, calc(100vw - 24px)); z-index:60;
   background:var(--card); border:1px solid var(--border); border-radius:10px;
   padding:11px 15px; font-size:.85rem; color:var(--text);
-  box-shadow:0 8px 26px rgba(0,0,0,.45); transition:transform .22s ease; text-align:center;
+  box-shadow:0 8px 26px rgba(0,0,0,.45); text-align:center;
+  opacity:0; visibility:hidden; pointer-events:none;
+  transition:transform .22s ease, opacity .22s ease, visibility 0s linear .22s;
 }
-.toast.show { transform:translate(-50%, 0); }
+.toast.show { transform:translate(-50%, 0); opacity:1; visibility:visible; pointer-events:auto;
+  transition:transform .22s ease, opacity .22s ease, visibility 0s; }
 .toast.bad { border-color:var(--bad); }
 @media (max-width:560px) { .toast { bottom:calc(20px + env(safe-area-inset-bottom, 0px)); } }
 
@@ -988,3 +991,237 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
   .block-head h1 { font-size:1.02rem; }
   .block-head .week-range { font-size:.88rem; }
 }
+
+/* Meal photos */
+.meal-photo { width:100%; max-height:180px; object-fit:cover; border-radius:10px; margin-bottom:8px; display:block; }
+.vote-photo { width:52px; height:52px; object-fit:cover; border-radius:8px; flex:0 0 auto; }
+.meal-photo-edit { width:100%; max-height:200px; object-fit:cover; border-radius:10px; margin:4px 0 8px; display:block; }
+
+/* Notepad theme — cream ruled paper, ink-blue handwriting, red margin line. */
+:root[data-notepad="1"] {
+  --bg:#efe6cf; --card:#fffbea; --border:#d9cfae; --text:#1f2a55; --muted:#6b6f86;
+  --accent:#c2412d; --good:#2f7d4a; --low:#b27a12; --bad:#b3261e;
+  color-scheme:light;
+}
+:root[data-notepad="1"] body {
+  font-family:"Noteworthy","Chalkboard SE","Comic Sans MS","Segoe Print",-apple-system,sans-serif;
+  font-size:16.5px; letter-spacing:.01em;
+}
+:root[data-notepad="1"] input, :root[data-notepad="1"] select,
+:root[data-notepad="1"] textarea, :root[data-notepad="1"] button { font-family:inherit; }
+:root[data-notepad="1"] .card, :root[data-notepad="1"] .day,
+:root[data-notepad="1"] .meal-card, :root[data-notepad="1"] .modal > * {
+  background-color:var(--card);
+  background-image:
+    linear-gradient(to right, transparent 26px, #e8a3a3 26px, #e8a3a3 28px, transparent 28px),
+    repeating-linear-gradient(to bottom, transparent 0, transparent 29px, #b9cbe6 29px, #b9cbe6 30px);
+  border:none; box-shadow:0 2px 6px rgba(80,60,20,.18);
+  padding-left:36px;
+}
+:root[data-notepad="1"] .shop-row { min-height:30px; border-bottom:none; }
+:root[data-notepad="1"] .shop-row input:checked ~ .shop-item .shop-name {
+  color:var(--muted); text-decoration:line-through 2px var(--text);
+}
+:root[data-notepad="1"] .tabs { background:#e4d8b8; }
+
+.redeemed-table { width:100%; border-collapse:collapse; font-size:.88rem; }
+.redeemed-table th { text-align:left; color:var(--muted); font-weight:600; padding:4px 6px; }
+.redeemed-table td { padding:6px; border-top:1px solid var(--border); }
+
+.votes-left {
+  position:fixed; left:16px; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); z-index:29;
+  background:var(--card); color:var(--text); border:2px solid var(--accent);
+  padding:10px 16px; border-radius:999px; font-size:.95rem; box-shadow:0 6px 20px rgba(0,0,0,.35);
+}
+.votes-left strong { font-size:1.2rem; color:var(--accent); }
+.votes-left.done { border-color:var(--good); color:var(--good); }
+body.nav-open .votes-left { display:none; }
+.vote-meta-inline { display:inline; font-size:.78rem; font-weight:400; margin:0; }
+
+/* ---- App feel: bottom tab bar on phones, native-ish taps, big titles ---- */
+* { -webkit-tap-highlight-color:transparent; }
+button, a, label, select { touch-action:manipulation; }
+button { transition:transform .08s ease, opacity .08s ease; }
+button:active:not(:disabled) { transform:scale(.96); opacity:.85; }
+
+@media (max-width:560px) {
+  body { padding-bottom:calc(84px + env(safe-area-inset-bottom, 0px)); }
+  .nav-toggle, .nav-backdrop { display:none !important; }
+  .tab-links {
+    position:fixed; top:auto; bottom:0; left:0; right:0; width:auto; height:auto;
+    transform:none; transition:none; z-index:40;
+    flex-direction:row; justify-content:space-around; align-items:stretch; gap:0;
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    background:color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter:blur(12px);
+    border-right:none; border-top:1px solid var(--border); overflow:visible;
+  }
+  .tab-links a {
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+    padding:4px 0; font-size:.62rem; font-weight:600; border-radius:10px; min-width:0;
+    color:var(--muted); background:none !important;
+  }
+  .tab-links a::before { font-size:1.35rem; line-height:1.1; filter:grayscale(1); opacity:.7; }
+  .tab-links a.active { color:var(--accent); }
+  .tab-links a.active::before { filter:none; opacity:1; }
+  .tab-links a[data-tab="plan"]::before { content:"📅"; }
+  .tab-links a[data-tab="shopping"]::before { content:"🛒"; }
+  .tab-links a[data-tab="meals"]::before { content:"🍽️"; }
+  .tab-links a[data-tab="vote"]::before { content:"🗳️"; }
+  .tab-links a[data-tab="rewards"]::before { content:"⭐"; }
+  .tab-links a[data-tab="history"]::before { content:"🕘"; }
+  .tab-links a[data-tab="extras"]::before { content:"🛍️"; }
+  .tab-links a[data-tab="settings"]::before { content:"⚙️"; }
+  .tabs { justify-content:flex-end; backdrop-filter:none; -webkit-backdrop-filter:none; background:var(--bg); }
+
+  .vote-fab { bottom:calc(92px + env(safe-area-inset-bottom, 0px)); }
+  .votes-left { bottom:calc(92px + env(safe-area-inset-bottom, 0px)); }
+  .toast { bottom:calc(96px + env(safe-area-inset-bottom, 0px)); }
+
+  button:not(.swatch):not(.rm):not(.tagf) { min-height:40px; }
+  main { padding:12px 14px 0; }
+  h1 { font-size:1.75rem; letter-spacing:-.02em; }
+  .block-head { margin-bottom:8px; }
+  .card { margin-bottom:10px; }
+}
+.tl-lunch-row { margin:2px 0 4px; }
+
+.plan-done-btn {
+  position:sticky; bottom:calc(12px + env(safe-area-inset-bottom, 0px)); z-index:28;
+  display:block; text-align:center; text-decoration:none; margin:16px 0 8px;
+  background:var(--good); color:#fff; font-weight:700; font-size:1.02rem;
+  padding:15px 18px; border-radius:14px; box-shadow:0 6px 20px rgba(0,0,0,.35);
+}
+@media (max-width:560px) { .plan-done-btn { bottom:calc(84px + env(safe-area-inset-bottom, 0px)); } }
+body:has(.plan-done-btn) .vote-fab { display:none; }
+@media (max-width:560px) {
+  .notice { font-size:.92rem; padding:14px 15px; line-height:1.5; }
+  .notice button, #shopCloseBtn {
+    display:block; width:100%; min-height:46px; margin:10px 0 0 !important;
+    font-size:1rem; font-weight:600;
+  }
+  .notice .hint { font-size:.8rem; margin-top:6px; }
+}
+/* Main next-step actions share the "Plan done" look. */
+#headingOutBtn, #shopCloseBtn[data-closed="1"], #advanceWeekBtn, .extras-cta, #finalizeBtn, .regulars-link, .next-step {
+  display:block; width:100%; text-align:center; text-decoration:none;
+  background:var(--good) !important; color:#fff !important; border:none !important;
+  font-weight:700; font-size:1.02rem; padding:15px 18px; min-height:50px;
+  border-radius:14px; box-shadow:0 6px 20px rgba(0,0,0,.3); margin:10px 0 !important;
+}
+/* Extras: roomier rows, big thumb-sized steppers, consistent green actions. */
+.extra-row { gap:10px; padding:10px 8px; border-bottom:1px solid var(--border); margin:0; border-radius:0; }
+.extra-row:last-child { border-bottom:none; }
+.extra-row.on { padding:10px 8px; margin:0; border-radius:10px; }
+.extra-row .shop-item { flex:1; min-width:0; font-weight:600; }
+.extra-row .shop-item .hint { font-weight:400; }
+.extra-actions { display:flex; gap:4px; flex-shrink:0; }
+.extra-row .del, .extra-row .editExtra { padding:6px 9px; font-size:.95rem; min-height:40px; }
+#exAdd { background:var(--good); color:#fff; border:none; font-weight:700; border-radius:12px; padding:0 18px; }
+.modal-actions .plan-done-btn { position:static; width:100%; }
+@media (max-width:560px) {
+  .stepBtn { width:42px; height:42px; font-size:1.35rem; border-radius:12px; }
+  .extra-row { flex-wrap:wrap; }
+  .extra-row .qty { display:none; }
+  .extra-row .shop-item { order:-1; flex:1 1 60%; }
+  .extra-stepper { order:0; }
+  .extra-actions { order:1; margin-left:auto; }
+}
+.pantry-intro { font-size:.95rem; border-left:4px solid var(--good); }
+.regulars-link:hover, .extras-cta:hover { filter:brightness(1.08); }
+.regulars-link strong { color:#fff; }
+.tabs a[data-tab="shopping"] { position:relative; }
+.tabs a[data-badge]:not([data-badge=""])::after {
+  content:attr(data-badge); position:absolute; top:0; right:4px;
+  background:var(--bad); color:#fff; font-size:.62rem; font-weight:700;
+  min-width:17px; height:17px; line-height:17px; border-radius:9px; padding:0 4px; text-align:center;
+}
+/* Phones have the Vote tab in the bottom bar — a dot on it replaces the floating button. */
+@media (max-width:560px) {
+  .vote-fab { display:none !important; }
+  .tabs a[data-tab="vote"] { position:relative; }
+  .tabs a.needs-vote::after {
+    content:""; position:absolute; top:2px; right:calc(50% - 16px);
+    width:10px; height:10px; border-radius:50%; background:var(--bad);
+  }
+}
+@media (max-width:560px) { .cycle-strip { display:none !important; } }
+.shop-done-btn {
+  display:block; width:100%; margin:0 0 12px; padding:14px 18px; min-height:50px;
+  border-radius:14px; font-weight:700; font-size:1rem; text-align:center;
+  background:color-mix(in srgb, var(--good) 14%, var(--card)); color:var(--good);
+  border:2px solid var(--good);
+}
+
+/* Extras: one tight line per item on phones */
+@media (max-width:560px) {
+  .extra-row { flex-wrap:nowrap; padding:6px 4px; gap:6px; }
+  .extra-row.on { padding:6px 4px; }
+  .extra-row .shop-item { order:0; flex:1; font-size:.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .extra-stepper { order:1; }
+  .extra-actions { order:2; margin-left:0; }
+  .stepBtn { width:36px; height:36px; }
+  .extra-row .del, .extra-row .editExtra { padding:4px 6px; min-height:36px; }
+}
+
+/* Add-item sheet */
+.big-input { width:100%; font-size:1.15rem; padding:14px; border-radius:12px; margin-bottom:12px; }
+.add-sheet-row { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:10px 0; border-top:1px solid var(--border); font-size:.95rem; }
+.add-sheet-row select { max-width:55%; }
+.ex-amt { width:48px; text-align:center; font-weight:700; font-size:1.05rem; padding:6px 2px; }
+.ex-unit { width:auto; }
+.ex-switch { width:24px; height:24px; }
+/* Picks-left: a slim strip docked above the bottom menu, never over the list. */
+@media (max-width:560px) {
+  .votes-left {
+    left:0; right:0; bottom:calc(61px + env(safe-area-inset-bottom, 0px));
+    border-radius:0; border:none; border-top:1px solid var(--border);
+    padding:7px 12px; text-align:center; font-size:.9rem; box-shadow:0 -4px 12px rgba(0,0,0,.12);
+    background:color-mix(in srgb, var(--card) 96%, transparent); backdrop-filter:blur(10px);
+  }
+  .votes-left strong { font-size:1.05rem; }
+  .votes-left.done { border-top:2px solid var(--good); }
+  body:has(.votes-left) { padding-bottom:calc(124px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ===== QA round fixes ===== */
+/* 4: This/Next week switch only on Plan and Shopping */
+body:not([data-tab="plan"]):not([data-tab="shopping"]) .week-toggle { display:none; }
+/* 6: per-day ⋯ menu */
+.day-hidden { display:none !important; }
+.dayMenu { font-size:1.2rem; font-weight:700; padding:2px 12px; min-height:36px; line-height:1; }
+.addLunch { display:none !important; }
+.action-sheet { display:flex; flex-direction:column; gap:8px; }
+.sheetBtn { width:100%; text-align:left; padding:14px 16px; font-size:1rem; border-radius:12px; min-height:50px; }
+.danger-text { color:var(--bad) !important; }
+.modal-actions:has(#delMeal), .modal-actions:has(#exEditDel) { justify-content:space-between; }
+/* 7: meals — one scrolling row of filters, tap card to edit */
+@media (max-width:560px) {
+  .tag-filters { flex-wrap:nowrap; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
+  .tag-filters::-webkit-scrollbar { display:none; }
+  .tag-filters .tagf { flex:0 0 auto; }
+}
+.meal-card.tappable { cursor:pointer; }
+.meal-card.tappable:active { transform:scale(.99); }
+/* 11 */
+@media (max-width:560px) { .desktop-only { display:none !important; } }
+/* 13: green action buttons are always full width */
+.plan-done-btn { width:100%; }
+#openAddExtra, #exAdd { width:100%; }
+/* 14: "[− 1 +] each" reads left to right */
+.add-sheet-row .extra-stepper { order:1; margin-left:auto; }
+.add-sheet-row .ex-unit { order:2; }
+/* 15: one calm colour for planned days, outline for empty, ring for today */
+.tl-badge[data-kind] { --badge:var(--accent); }
+.tl-badge[data-kind="none"] { --badge:transparent; }
+/* 12: notepad — each row IS a ruled line, so text always sits on one */
+:root[data-notepad="1"] .card, :root[data-notepad="1"] .day,
+:root[data-notepad="1"] .meal-card, :root[data-notepad="1"] .modal > * {
+  background-image:linear-gradient(to right, transparent 26px, #e8a3a3 26px, #e8a3a3 28px, transparent 28px);
+}
+:root[data-notepad="1"] .card .row, :root[data-notepad="1"] .shop-row,
+:root[data-notepad="1"] .extra-row, :root[data-notepad="1"] .redeemed-table td,
+:root[data-notepad="1"] .add-sheet-row, :root[data-notepad="1"] .vote-row {
+  border-bottom:1px solid #b9cbe6 !important; border-top:none !important;
+}
+.tl-title .tl-lunch { flex-basis:100%; font-size:.82rem; font-weight:500; color:var(--muted); margin-bottom:-4px; }
