@@ -1225,3 +1225,28 @@ body:not([data-tab="plan"]):not([data-tab="shopping"]) .week-toggle { display:no
   border-bottom:1px solid #b9cbe6 !important; border-top:none !important;
 }
 .tl-title .tl-lunch { flex-basis:100%; font-size:.82rem; font-weight:500; color:var(--muted); margin-bottom:-4px; }
+
+/* ---- Pricing (desktop admin) ---- */
+@media (max-width:560px) { .tab-links a[data-tab="pricing"] { display:none !important; } }
+.pricing-bar { display:flex; gap:8px; margin:0 0 12px; }
+.pricing-bar input { flex:1; }
+.pricing-table-wrap { overflow-x:auto; padding:0; }
+.pricing-table { width:100%; border-collapse:collapse; font-size:.86rem; }
+.pricing-table th { text-align:left; color:var(--muted); font-weight:600; padding:8px; border-bottom:1px solid var(--border); }
+.pricing-table td { padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }
+.pt-item { font-weight:600; white-space:nowrap; }
+.pt-meals { color:var(--muted); font-size:.78rem; max-width:220px; }
+.pt-range { font-weight:700; white-space:nowrap; }
+.price-chip { display:inline-flex; align-items:center; gap:4px; background:color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius:8px; padding:3px 6px; margin:0 4px 4px 0; }
+.price-chip.missing { opacity:.5; text-decoration:line-through; }
+.price-chip button { padding:0 4px; min-height:0; font-size:.75rem; background:none; border:none; color:var(--muted); }
+.aldi-results { max-height:60vh; overflow-y:auto; }
+.aldi-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); }
+.aldi-row > span:first-child { flex:1; }
+.aldi-price { font-weight:700; white-space:nowrap; }
+.shop-price { margin-left:6px; font-size:.75rem; color:var(--muted); font-weight:400; }
+.shop-estimate strong { font-size:1.05rem; }
+body[data-tab="pricing"] main { max-width:1150px; }
+body[data-tab="pricing"] #modal > * { max-width:820px; }
+.shop-total-line { display:block; width:100%; text-align:center; border:none; color:var(--text); margin:-4px 0 12px; cursor:pointer; }

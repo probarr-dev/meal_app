@@ -24,7 +24,7 @@ const MEAL_TYPES = [
 ];
 const TAB_KEYS = [
   ["plan", "Plan"], ["shopping", "Shopping"], ["extras", "Extras"], ["meals", "Meals"],
-  ["vote", "Vote"], ["rewards", "Rewards"], ["history", "History"], ["settings", "Settings"],
+  ["vote", "Vote"], ["rewards", "Rewards"], ["pricing", "Prices"], ["history", "History"], ["settings", "Settings"],
 ];
 // null/unset allowed_tabs = everyone, unchanged from before this feature
 // existed. Admins always keep Settings regardless of what's configured —
@@ -397,6 +397,21 @@ const fmtWeekRange = (startISO) => {
 const weekBannerHTML = (startISO) =>
   startISO ? `<span class="week-range">${esc(fmtWeekRange(startISO))}</span>` : "";
 
+// Average of the last 6 shops with a real total typed in.
+function shopAverage() {
+  const done = S.weeks.filter((w) => w.shop_total > 0).sort((a, b) => b.start_date.localeCompare(a.start_date)).slice(0, 6);
+  return done.length ? { avg: done.reduce((s, w) => s + w.shop_total, 0) / done.length, n: done.length } : null;
+}
+async function askShopTotal(weekId, current) {
+  const v = await textPrompt("How much did the shop come to?", { placeholder: current ? `£${current.toFixed(2)}` : "e.g. 68.40", okLabel: "Save" });
+  if (v === null) return false;
+  const n = parseFloat(v.replace(/[£,\s]/g, ""));
+  if (v !== "" && !(n >= 0)) { toast("That doesn't look like an amount.", "bad"); return false; }
+  const r = await api.post("/api/week/shop-total", { actor_id: S.meId, week_id: weekId, total: v === "" ? null : n });
+  if (r.error) { toast(r.error, "bad"); return false; }
+  return true;
+}
+
 const weekWords = (id) => (id === S.thisWeekId ? "this week" : id === S.nextWeekId ? "next week" : "the week of");
 
 const advanceWeekHTML = () =>
@@ -716,7 +731,7 @@ function route() {
   document.body.dataset.tab = tab;
   const view = {
     plan: viewPlan, meals: viewMeals,
-    vote: viewVote, shopping: viewShopping, extras: viewRegulars,
+    vote: viewVote, shopping: viewShopping, extras: viewRegulars, pricing: viewPricing,
     rewards: viewRewards, history: viewHistory, settings: viewSettings,
   }[tab] || viewPlan;
   updateVoteFab(tab);
@@ -1163,7 +1178,7 @@ async function viewShopping() {
   if (!S.storeId || !S.stores.some((s) => s.id === S.storeId)) {
     S.storeId = +(localStorage.getItem("mealplan-store") || 0) || S.stores[0]?.id || null;
   }
-  const [{ groups: rawGroups, phase }, { extras, requests }] = await Promise.all([
+  const [{ groups: rawGroups, phase, estimate }, { extras, requests }] = await Promise.all([
     api.get(`/api/shopping?id=${S.weekId}${S.storeId ? `&store_id=${S.storeId}` : ""}`),
     api.get(`/api/extras?week_id=${S.weekId}`),
   ]);
@@ -1242,7 +1257,7 @@ async function viewShopping() {
       <input type="checkbox" data-item="${esc(i.key)}" ${i.checked ? "checked" : ""}>
       <span class="qty">${esc(i.qty)}</span>
       <span class="shop-item">
-        <span class="shop-name">${esc(i.item)}</span>
+        <span class="shop-name">${esc(i.item)}</span>${i.priceLow != null ? `<span class="shop-price">£${i.priceLow.toFixed(2)}${i.priceHigh > i.priceLow ? `–${i.priceHigh.toFixed(2)}` : ""}</span>` : ""}
         ${meta ? `<span class="shop-meta">${meta}</span>` : ""}
       </span>
     </label>`;
@@ -1287,10 +1302,22 @@ async function viewShopping() {
         <button onclick="window.print()" class="desktop-only" aria-label="Print list" title="Print list"><span aria-hidden="true">🖨️</span><span class="btn-label">Print</span></button>
       </div></header>
     ${cycleStripHTML("shop")}
+    ${(() => {
+      const av = shopAverage(), has = estimate && estimate.high > 0;
+      if (!av && !has) return "";
+      const parts = [];
+      if (av) parts.push(`Usual shop <strong>£${Math.round(av.avg)}</strong>`);
+      if (has) parts.push(`this list ≈ <strong>£${Math.round(estimate.low)}${Math.round(estimate.high) > Math.round(estimate.low) ? `–£${Math.round(estimate.high)}` : ""}</strong>${estimate.unpriced.length ? ` <span class="hint" style="display:inline">(${estimate.unpriced.length} not priced)</span>` : ""}`);
+      return `<div class="notice small shop-estimate">💷 ${parts.join(" · ")}</div>`;
+    })()}
 
     ${(S.weeks.find((w) => w.id === S.weekId) || {}).shop_closed ? "" : `<button id="backToPantryBtn" class="link-toggle no-print" style="margin-bottom:8px">← Back to cupboard check</button>`}
     ${(S.weeks.find((w) => w.id === S.weekId) || {}).shop_closed
-      ? (parent ? `<button id="shopCloseBtn" data-closed="0" class="shop-done-btn no-print">🔒 Shopping done — Reopen?</button>`
+      ? (parent ? `<button id="shopCloseBtn" data-closed="0" class="shop-done-btn no-print">🔒 Shopping done — Reopen?</button>
+          ${(() => { const w = S.weeks.find((x) => x.id === S.weekId) || {}; const av = shopAverage();
+            return `<button id="shopTotalBtn" class="notice small no-print shop-total-line">${w.shop_total != null
+              ? `💷 Spent <strong>£${w.shop_total.toFixed(2)}</strong>${av ? ` · average £${av.avg.toFixed(2)} over ${av.n} shop${av.n === 1 ? "" : "s"}` : ""} <span class="hint" style="display:inline">· edit</span>`
+              : `💷 Add what this shop cost →`}</button>`; })()}`
                 : `<div class="notice small good no-print">🔒 <strong>Shopping done</strong></div>`)
       : `<button id="shopCloseBtn" data-closed="1" class="primary no-print" style="margin:0 0 10px 8px">✅ Done — lock list</button>`}
 
@@ -1453,12 +1480,18 @@ async function viewShopping() {
   const shoppingText = () => groups.map((g) =>
     g.aisle.toUpperCase() + "\n" + g.items.map((i) => `  ${i.qty}  ${i.item}`).join("\n")).join("\n\n");
 
+  const shopTotalBtn = document.getElementById("shopTotalBtn");
+  if (shopTotalBtn) shopTotalBtn.onclick = busy(shopTotalBtn, async () => {
+    const w = S.weeks.find((x) => x.id === S.weekId) || {};
+    if (await askShopTotal(S.weekId, w.shop_total)) await boot();
+  });
   const shopClose = document.getElementById("shopCloseBtn");
   if (shopClose) shopClose.onclick = busy(shopClose, async () => {
     const closing = shopClose.dataset.closed === "1";
     if (closing && !(await confirmDialog("Lock this week's list? Nobody will be able to add extras to it after this.",
         { title: "Shopping done?", okLabel: "Lock it" }))) return;
     await api.post("/api/week/shop-close", { week_id: S.weekId, closed: closing ? 1 : 0 });
+    if (closing) await askShopTotal(S.weekId);
     await boot();
   });
   const backToPantry = document.getElementById("backToPantryBtn");
@@ -2882,3 +2915,97 @@ setInterval(async () => {
   }
   liveV = v;
 }, 4000);
+
+/* ---------------------------------------------------------------- pricing */
+// Desktop admin page: every ingredient and extra in one place, each linked to
+// one or more Aldi products so the shopping list can show a price range.
+async function viewPricing() {
+  if (!isParent()) {
+    document.getElementById("view").innerHTML = `<p class="empty">Prices are for parents.</p>`;
+    return;
+  }
+  S.pricingFilter = S.pricingFilter || { q: "", show: "all" };
+  const f = S.pricingFilter;
+  const { items, lastChecked } = await api.get("/api/pricing/items");
+  const shown = items.filter((i) => (!f.q || i.key.toLowerCase().includes(f.q.toLowerCase()))
+    && (f.show === "all" || (f.show === "unlinked" ? !i.products.length : i.products.length)));
+  const linked = items.filter((i) => i.products.length).length;
+  const money = (n) => `£${n.toFixed(2)}`;
+  document.getElementById("view").innerHTML = `
+    <header class="block-head"><h1>Prices</h1>
+      <span class="week-range">${linked} of ${items.length} items priced</span>
+      <div class="actions"><button id="priceRefresh" class="primary">↻ Refresh prices</button></div></header>
+    <p class="subtitle">Aldi prices${lastChecked ? `, last checked ${esc(new Date(lastChecked.replace(" ", "T") + "Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}` : ""}. Link more than one product to get a price range.</p>
+    <div class="pricing-bar">
+      <input id="priceQ" placeholder="Search items…" value="${esc(f.q)}">
+      <select id="priceShow">${[["all", "All items"], ["unlinked", "Not priced yet"], ["linked", "Priced"]]
+        .map(([v, l]) => `<option value="${v}" ${f.show === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    </div>
+    <div class="card pricing-table-wrap"><table class="pricing-table">
+      <tr><th>Item</th><th>Used in</th><th>Aldi products</th><th>Range</th><th></th></tr>
+      ${shown.map((i) => `<tr>
+        <td class="pt-item">${esc(i.key)}</td>
+        <td class="pt-meals">${esc(i.meals.join(", "))}</td>
+        <td>${i.products.map((p) => `<span class="price-chip ${p.missing ? "missing" : ""}" title="${esc(p.category)}">
+            ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
+            <button class="unlinkBtn" data-id="${p.id}" aria-label="Remove">✕</button></span>`).join("") || `<span class="hint" style="display:inline">—</span>`}</td>
+        <td class="pt-range">${i.low != null ? money(i.low) + (i.high > i.low ? `–${money(i.high)}` : "") : ""}</td>
+        <td><button class="linkBtn ghost" data-key="${esc(i.key)}">＋ Link</button></td>
+      </tr>`).join("") || `<tr><td colspan="5" class="empty">Nothing matches.</td></tr>`}
+    </table></div>`;
+
+  const q = document.getElementById("priceQ");
+  q.oninput = () => { f.q = q.value; clearTimeout(viewPricing._t); viewPricing._t = setTimeout(async () => {
+    await viewPricing(); const el = document.getElementById("priceQ"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  }, 250); };
+  document.getElementById("priceShow").onchange = (e) => { f.show = e.target.value; viewPricing(); };
+  document.querySelectorAll(".unlinkBtn").forEach((b) => (b.onclick = busy(b, async () => {
+    await api.post("/api/pricing/unlink", { id: +b.dataset.id, actor_id: S.meId });
+    viewPricing();
+  })));
+  const refresh = document.getElementById("priceRefresh");
+  refresh.onclick = busy(refresh, async () => {
+    const r = await api.post("/api/pricing/refresh", { actor_id: S.meId });
+    if (r.error) return toast(r.error, "bad");
+    openModal("Prices refreshed", `
+      <p>Checked ${r.checked} product${r.checked === 1 ? "" : "s"}.</p>
+      ${r.changed.length ? `<table class="redeemed-table"><tr><th>Product</th><th>Was</th><th>Now</th></tr>
+        ${r.changed.map((c) => `<tr><td>${esc(c.name)}</td><td>${money(c.old)}</td><td><strong>${money(c.new)}</strong></td></tr>`).join("")}</table>`
+        : `<p class="hint">No price changes.</p>`}
+      ${r.missing.length ? `<p class="danger-text">No longer listed: ${esc(r.missing.join(", "))}</p>` : ""}
+      ${r.failed ? `<p class="hint">${r.failed} couldn't be checked — try again later.</p>` : ""}`);
+    viewPricing();
+  });
+  document.querySelectorAll(".linkBtn").forEach((b) => (b.onclick = () => priceLinker(b.dataset.key)));
+}
+
+function priceLinker(key) {
+  openModal(`Link Aldi products — ${key}`, `
+    <div class="pricing-bar"><input id="aldiQ" value="${esc(key)}"><button id="aldiGo" class="primary">Search</button></div>
+    <div id="aldiResults" class="aldi-results"><p class="hint">Searching…</p></div>`);
+  const added = new Set();
+  const run = async () => {
+    const box = document.getElementById("aldiResults");
+    box.innerHTML = `<p class="hint">Searching…</p>`;
+    const r = await api.get(`/api/pricing/search?q=${encodeURIComponent(document.getElementById("aldiQ").value)}`).catch(() => null);
+    if (!r || r.error) { box.innerHTML = `<p class="danger-text">${esc(r?.error || OFFLINE_MSG)}</p>`; return; }
+    box.innerHTML = r.results.map((p, n) => `<div class="aldi-row">
+        <span><strong>${esc(p.name)}</strong> <span class="hint" style="display:inline">${esc(p.brand)} · ${esc(p.size)} · ${esc(p.category)}</span></span>
+        <span class="aldi-price">£${p.price.toFixed(2)}</span>
+        <button class="aldiAdd ${added.has(p.sku) ? "" : "primary"}" data-n="${n}" ${added.has(p.sku) ? "disabled" : ""}>${added.has(p.sku) ? "Added ✓" : "Add"}</button>
+      </div>`).join("") || `<p class="hint">No results — try a shorter search.</p>`;
+    document.querySelectorAll(".aldiAdd").forEach((btn) => (btn.onclick = busy(btn, async () => {
+      const p = r.results[+btn.dataset.n];
+      const res = await api.post("/api/pricing/link", { actor_id: S.meId, key, product: p });
+      if (res.error) return toast(res.error, "bad");
+      added.add(p.sku); btn.textContent = "Added ✓"; btn.disabled = true; btn.classList.remove("primary");
+    })));
+  };
+  document.getElementById("aldiGo").onclick = run;
+  document.getElementById("aldiQ").onkeydown = (e) => { if (e.key === "Enter") run(); };
+  run();
+  const obs = new MutationObserver(() => {
+    if (document.getElementById("modal").classList.contains("hidden")) { obs.disconnect(); if (location.hash === "#/pricing") viewPricing(); }
+  });
+  obs.observe(document.getElementById("modal"), { attributes: true, attributeFilter: ["class"] });
+}

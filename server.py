@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import urllib.parse
+import urllib.request
 from datetime import date, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -111,6 +112,7 @@ def migrate(conn):
         # explicit tap once someone's actually heading out.
         ("week", "shopping_phase", "TEXT DEFAULT 'pantry'"),
         ("week", "shop_closed", "INTEGER DEFAULT 0"),
+        ("week", "shop_total", "REAL"),
         # How many of an extra to get this particular week — "2 juice"
         # instead of the household default of 1 — without changing what
         # future weeks default to.
@@ -545,6 +547,74 @@ def fmt_qty(amount, unit):
     return f"{amount:g} {PLURALS.get(unit, unit + 's')}"
 
 
+# ---------------------------------------------------------------- pricing
+# Aldi's own website reads its product data from this public JSON API. It's
+# unofficial: if it changes, links keep their last known price and only the
+# search/refresh stops working.
+ALDI_API = "https://api.aldi.co.uk"
+
+
+def aldi_get(path):
+    req = urllib.request.Request(ALDI_API + path, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        return json.load(r)
+
+
+def aldi_trim(p):
+    cats = [c.get("name") for c in (p.get("categories") or []) if c.get("name")]
+    return {"sku": p.get("sku"), "name": p.get("name") or "", "brand": p.get("brandName") or "",
+            "size": p.get("sellingSize") or "", "price": ((p.get("price") or {}).get("amount") or 0) / 100,
+            "category": " › ".join(cats[:2])}
+
+
+def item_key(name):
+    return " ".join((name or "").strip().split()).title()
+
+
+def packs_needed(amount, unit, size):
+    """Whole packs to buy: what the till actually charges, not a per-meal share."""
+    m = re.match(r"\s*([\d.]+)\s*([A-Za-z]+)", size or "")
+    amount = float(amount or 0)
+    if not m or amount <= 0:
+        return max(1, math.ceil(amount or 1))
+    n, u = float(m.group(1)), m.group(2).upper()
+    grams = {"KG": 1000, "G": 1}.get(u)
+    mls = {"L": 1000, "ML": 1, "CL": 10}.get(u)
+    if unit == "g" and grams:
+        return max(1, math.ceil(amount / (n * grams) - 1e-9))
+    if unit == "ml" and mls:
+        return max(1, math.ceil(amount / (n * mls) - 1e-9))
+    if unit == "unit" and u == "EACH" and n > 1:
+        return max(1, math.ceil(amount / n - 1e-9))
+    return max(1, math.ceil(amount - 1e-9))
+
+
+def price_links(conn):
+    out = {}
+    for r in rows(conn.execute("SELECT * FROM price_product ORDER BY price")):
+        out.setdefault(r["item_key"], []).append(r)
+    return out
+
+
+def add_estimate(conn, groups):
+    """Attach a price range per shopping item and a whole-shop estimate."""
+    links = price_links(conn)
+    low = high = 0.0
+    unpriced = []
+    for g in groups:
+        for i in g["items"]:
+            prods = [p for p in links.get(i["key"], []) if not p["missing"]]
+            if not prods:
+                if not i.get("pantryChecked"):
+                    unpriced.append(i["item"])
+                continue
+            costs = [packs_needed(i["amount"], i["unit"], p["size"]) * p["price"] for p in prods]
+            i["priceLow"], i["priceHigh"] = round(min(costs), 2), round(max(costs), 2)
+            if not i.get("pantryChecked"):
+                low += min(costs); high += max(costs)
+    return {"low": round(low, 2), "high": round(high, 2), "unpriced": unpriced}
+
+
 def log_extra(conn, person_id, item, week_id, action):
     conn.execute("INSERT INTO extra_log(person_id,item,week_id,action) VALUES (?,?,?,?)",
                  (person_id or None, item, week_id, action))
@@ -939,8 +1009,39 @@ class Handler(SimpleHTTPRequestHandler):
             sid = q.get("store_id", [""])[0]
             phase = (conn.execute("SELECT shopping_phase FROM week WHERE id=?", (wid,)).fetchone()
                      or {"shopping_phase": "pantry"})["shopping_phase"]
-            return self.send_json({"groups": build_shopping(conn, wid, int(sid) if sid else None),
-                                   "phase": phase})
+            groups = build_shopping(conn, wid, int(sid) if sid else None)
+            return self.send_json({"groups": groups, "phase": phase,
+                                   "estimate": add_estimate(conn, groups)})
+
+        if path == "/api/pricing/items":
+            items = {}
+            for r in rows(conn.execute("""SELECT mi.item, m.name AS meal FROM meal_ingredient mi
+                                          JOIN meal m ON m.id=mi.meal_id WHERE m.deleted_at IS NULL""")):
+                items.setdefault(item_key(r["item"]), set()).add(r["meal"])
+            for r in rows(conn.execute("SELECT item FROM extra")):
+                items.setdefault(item_key(r["item"]), set()).add("Extras")
+            links = price_links(conn)
+            out = []
+            for k in sorted(items):
+                if not k:
+                    continue
+                prods = links.get(k, [])
+                live = [p["price"] for p in prods if not p["missing"]]
+                out.append({"key": k, "meals": sorted(items[k]), "products": prods,
+                            "low": min(live) if live else None, "high": max(live) if live else None})
+            last = conn.execute("SELECT MAX(checked_at) c FROM price_product").fetchone()["c"]
+            return self.send_json({"items": out, "lastChecked": last})
+
+        if path == "/api/pricing/search":
+            term = (q.get("q", [""])[0] or "").strip()
+            if not term:
+                return self.send_json({"results": []})
+            try:
+                d = aldi_get("/v3/product-search?" + urllib.parse.urlencode(
+                    {"currency": "GBP", "serviceType": "walk-in", "q": term, "page[limit]": 24}))
+            except Exception:
+                return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
+            return self.send_json({"results": [aldi_trim(p) for p in d.get("data", [])]})
 
         if path == "/api/poll":
             # The new flat weekly poll — one like per person per meal, no
@@ -1202,6 +1303,15 @@ class Handler(SimpleHTTPRequestHandler):
             wk = conn.execute("SELECT shop_closed FROM week WHERE id=?", (b["week_id"],)).fetchone()
             if wk and wk["shop_closed"]:
                 return self.send_json({"error": "That week's shop is marked done — nothing more can be added to it."}, 400)
+
+        if path == "/api/week/shop-total":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            t = b.get("total")
+            conn.execute("UPDATE week SET shop_total=? WHERE id=?",
+                         (round(float(t), 2) if t not in (None, "") else None, b["week_id"]))
+            conn.commit()
+            return self.send_json({"ok": True})
 
         if path == "/api/week/shop-close":
             conn.execute("UPDATE week SET shop_closed=? WHERE id=?", (1 if b.get("closed") else 0, b["week_id"]))
@@ -1672,6 +1782,53 @@ class Handler(SimpleHTTPRequestHandler):
                                 ON CONFLICT(store_id,name) DO UPDATE SET pos=excluded.pos""", (sid, name, i))
             conn.commit()
             return self.send_json({"ok": True})
+
+        if path.startswith("/api/pricing/") and not is_parent(conn, b.get("actor_id")):
+            return self.send_json({"error": "Only a parent can change prices."}, 403)
+
+        if path == "/api/pricing/link":
+            p = b["product"]
+            if not conn.execute("SELECT 1 FROM price_product WHERE item_key=? AND sku=?",
+                                (b["key"], p["sku"])).fetchone():
+                conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,checked_at)
+                                VALUES (?,?,?,?,?,?,?,datetime('now'))""",
+                             (b["key"], p["sku"], p["name"], p.get("brand", ""), p.get("size", ""),
+                              float(p.get("price") or 0), p.get("category", "")))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/pricing/unlink":
+            conn.execute("DELETE FROM price_product WHERE id=?", (b["id"],))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/pricing/refresh":
+            changed, missing, failed = [], [], 0
+            skus = [r["sku"] for r in rows(conn.execute("SELECT DISTINCT sku FROM price_product"))]
+            for sku in skus:
+                try:
+                    d = aldi_get(f"/v2/products/{urllib.parse.quote(sku)}?currency=GBP&serviceType=walk-in")["data"]
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        conn.execute("UPDATE price_product SET missing=1, checked_at=datetime('now') WHERE sku=?", (sku,))
+                        missing.append(sku)
+                    else:
+                        failed += 1
+                    continue
+                except Exception:
+                    failed += 1
+                    continue
+                t = aldi_trim(d)
+                for r in rows(conn.execute("SELECT id, name, price FROM price_product WHERE sku=?", (sku,))):
+                    if abs((r["price"] or 0) - t["price"]) > 0.001:
+                        changed.append({"name": r["name"], "old": r["price"], "new": t["price"]})
+                conn.execute("""UPDATE price_product SET price=?, size=?, name=?, missing=0,
+                                checked_at=datetime('now') WHERE sku=?""",
+                             (t["price"], t["size"], t["name"], sku))
+            conn.commit()
+            names = {r["sku"]: r["name"] for r in rows(conn.execute("SELECT sku, name FROM price_product"))}
+            return self.send_json({"checked": len(skus), "changed": changed,
+                                   "missing": [names.get(s, s) for s in missing], "failed": failed})
 
         if path == "/api/extra-request/set":
             # Kids use the same +/- as parents, but it only ever changes their

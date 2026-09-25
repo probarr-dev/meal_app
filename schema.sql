@@ -139,3 +139,18 @@ CREATE TABLE IF NOT EXISTS extra_log (
   action     TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Aldi products linked to a shopping item (several per item gives a price range).
+CREATE TABLE IF NOT EXISTS price_product (
+  id         INTEGER PRIMARY KEY,
+  item_key   TEXT NOT NULL,
+  sku        TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  brand      TEXT DEFAULT '',
+  size       TEXT DEFAULT '',
+  price      REAL DEFAULT 0,
+  category   TEXT DEFAULT '',
+  missing    INTEGER DEFAULT 0,
+  checked_at TEXT,
+  UNIQUE(item_key, sku)
+);
