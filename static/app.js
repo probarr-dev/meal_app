@@ -140,6 +140,20 @@ function applyTheme() {
 
 // Any failure here must be visible. A silent catch means clicking a tab
 // appears to do nothing, which is impossible to diagnose from the outside.
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full or blocked */ } }
+const pendingTicks = () => lsGet("mealplan-pending-ticks") || [];
+function queueTick(t) {
+  lsSet("mealplan-pending-ticks", pendingTicks().filter((x) => !(x.week_id === t.week_id && x.item === t.item)).concat(t));
+}
+async function flushTicks() {
+  for (const t of pendingTicks()) {
+    try { await api.post("/api/shop-tick", t); } catch { return; }
+    lsSet("mealplan-pending-ticks", pendingTicks().filter((x) => !(x.week_id === t.week_id && x.item === t.item)));
+  }
+}
+window.addEventListener("online", () => flushTicks());
+
 async function req(path, opts) {
   let res;
   try {
@@ -934,6 +948,8 @@ async function viewPlan() {
 
     ${parent && !pool.pool.length && data.days.some((d) => d.meal) && !(S.weeks.find((w) => w.id === S.weekId) || {}).shop_closed ? `
       <a href="#/shopping" class="plan-done-btn no-print">✅ Plan done →</a>` : ""}`;
+  document.getElementById("view").insertAdjacentHTML("afterbegin", installBannerHTML());
+  wireInstallBanner();
 
   // Toggling is a class flip, not a re-render — nothing moves except the fold.
   const togglePast = document.getElementById("togglePast");
@@ -1178,10 +1194,27 @@ async function viewShopping() {
   if (!S.storeId || !S.stores.some((s) => s.id === S.storeId)) {
     S.storeId = +(localStorage.getItem("mealplan-store") || 0) || S.stores[0]?.id || null;
   }
-  const [{ groups: rawGroups, phase, estimate }, { extras, requests }] = await Promise.all([
-    api.get(`/api/shopping?id=${S.weekId}${S.storeId ? `&store_id=${S.storeId}` : ""}`),
-    api.get(`/api/extras?week_id=${S.weekId}`),
-  ]);
+  // Supermarket signal is patchy: keep the last good list on the phone and
+  // show it (with any unsynced ticks applied) when the server can't be reached.
+  const cacheKey = `mealplan-shopcache-${S.weekId}-${S.storeId || 0}`;
+  let shopData, offline = false;
+  try {
+    shopData = await Promise.all([
+      api.get(`/api/shopping?id=${S.weekId}${S.storeId ? `&store_id=${S.storeId}` : ""}`),
+      api.get(`/api/extras?week_id=${S.weekId}`),
+    ]);
+    lsSet(cacheKey, shopData);
+  } catch (err) {
+    shopData = lsGet(cacheKey);
+    if (!shopData) throw err;
+    offline = true;
+  }
+  const pend = pendingTicks().filter((t) => t.week_id === S.weekId);
+  shopData[0].groups.forEach((g) => g.items.forEach((i) => {
+    const p = pend.find((t) => t.item === i.key);
+    if (p) i.checked = !!p.checked;
+  }));
+  const [{ groups: rawGroups, phase, estimate }, { extras, requests }] = shopData;
   if (!S.meals.length) S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
   const parent = isParent();
 
@@ -1302,6 +1335,7 @@ async function viewShopping() {
         <button onclick="window.print()" class="desktop-only" aria-label="Print list" title="Print list"><span aria-hidden="true">🖨️</span><span class="btn-label">Print</span></button>
       </div></header>
     ${cycleStripHTML("shop")}
+    ${offline ? `<div class="notice small warn no-print">📶 No connection — showing the list saved on this phone. Ticks are kept and sync when you're back online.</div>` : ""}
     ${(() => {
       const av = shopAverage(), has = estimate && estimate.high > 0;
       if (!av && !has) return "";
@@ -1444,9 +1478,8 @@ async function viewShopping() {
           week_id: S.weekId, item: box.dataset.item, checked: wanted,
         });
       } catch (err) {
-        box.checked = !wanted;
-        toast(OFFLINE_MSG, "bad");
-        return;
+        queueTick({ week_id: S.weekId, item: box.dataset.item, checked: wanted });
+        toast("No signal — tick saved on this phone, it'll sync later.", "good");
       }
       if (wanted) {
         const timer = setTimeout(() => demoteToTrolley(row), DEMOTE_DELAY_MS);
@@ -1705,6 +1738,12 @@ async function viewRegulars() {
       (${esc(fmtWeekRange(S.weeks.find((w) => w.id === weekId)?.start_date || ""))}).</div>
 
     <button id="openAddExtra" class="plan-done-btn no-print" style="position:static;margin:0 0 12px">＋ Add item</button>
+    ${(() => {
+      const usual = extras.filter((e) => (e.prior_weeks || 0) >= 3 && !(parent ? e.active : myAsk[e.item.toLowerCase()]))
+        .sort((x, y) => y.prior_weeks - x.prior_weeks).slice(0, 8);
+      return usual.length ? `<div class="usual-row no-print"><span class="hint" style="display:inline">You usually get:</span>
+        ${usual.map((e) => `<button class="usualChip" data-id="${e.id}">＋ ${esc(e.item)}</button>`).join("")}</div>` : "";
+    })()}
 
     <div class="card">
       ${extras.map((e) => {
@@ -1751,6 +1790,14 @@ async function viewRegulars() {
       if (again) window.scrollBy(0, Math.round(again.getBoundingClientRect().top - before));
     })));
 
+  document.querySelectorAll(".usualChip").forEach((b) => (b.onclick = busy(b, async () => {
+    const r = parent
+      ? await api.post("/api/extra/set-qty", { week_id: weekId, id: +b.dataset.id, qty: 1, by: S.meId }).catch(() => null)
+      : await api.post("/api/extra-request/set", { person_id: S.meId, extra_id: +b.dataset.id, week_id: weekId, qty: 1 }).catch(() => null);
+    if (!r || r.error) return toast(r?.error || OFFLINE_MSG, "bad");
+    toast(parent ? "Added to the next shop." : "Asked — a grown-up will check it.", "good");
+    viewRegulars();
+  })));
   keepUnderFinger(".stepBtn", async (b) => {
     if (!parent) {
       const q = +b.dataset.qty;
@@ -2305,6 +2352,7 @@ async function viewSettings() {
 
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Settings</h1></header>
+    ${isInstalled() ? "" : `<button id="installSettings" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">📲 <strong>Add to home screen</strong> →</button>`}
     <a href="#/history" class="notice small" style="display:block;text-decoration:none;color:var(--text)">🕘 <strong>Past weeks</strong> →</a>
     <button id="extraLogBtn" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">🧾 <strong>Extras history</strong> — who added what →</button>
 
@@ -2503,6 +2551,8 @@ async function viewSettings() {
     await boot(); viewSettings();
   });
 
+  const installSettings = document.getElementById("installSettings");
+  if (installSettings) installSettings.onclick = showInstall;
   const extraLogBtn = document.getElementById("extraLogBtn");
   if (extraLogBtn) extraLogBtn.onclick = busy(extraLogBtn, async () => {
     const { log } = await api.get(`/api/extra-log?person=${S.meId || ""}`);
@@ -2889,6 +2939,7 @@ setInterval(async () => {
   let v;
   let pending = 0, build;
   try { ({ v, pending, build } = await api.get("/api/version")); } catch { return; }
+  if (pendingTicks().length) await flushTicks();
   // New code deployed while this page sat open: reload so nobody keeps
   // running (and acting on) an old version of the app.
   if (liveBuild && build && build !== liveBuild) {
@@ -3008,4 +3059,40 @@ function priceLinker(key) {
     if (document.getElementById("modal").classList.contains("hidden")) { obs.disconnect(); if (location.hash === "#/pricing") viewPricing(); }
   });
   obs.observe(document.getElementById("modal"), { attributes: true, attributeFilter: ["class"] });
+}
+
+/* ------------------------------------------------------ install to home screen */
+// Browsers only offer a real install prompt on HTTPS; this app runs on plain
+// http on the LAN, so Android gets the prompt only if the browser offers it,
+// otherwise both platforms get the short manual steps.
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredInstall = e; });
+const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isPhone = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+async function showInstall() {
+  if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; return; }
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  openModal("Add to your home screen", ios ? `
+    <ol class="install-steps">
+      <li>Open this page in <strong>Safari</strong>.</li>
+      <li>Tap the <strong>Share</strong> button <span aria-hidden="true">⬆︎</span> at the bottom.</li>
+      <li>Scroll down, tap <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
+    </ol>` : `
+    <ol class="install-steps">
+      <li>Open this page in <strong>Chrome</strong>.</li>
+      <li>Tap the <strong>⋮</strong> menu at the top right.</li>
+      <li>Tap <strong>Add to Home screen</strong> (or <strong>Install app</strong>), then <strong>Add</strong>.</li>
+    </ol>`);
+}
+function installBannerHTML() {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem("mealplan-install-dismissed") === "1"; } catch { /* ignore */ }
+  if (isInstalled() || !isPhone() || dismissed) return "";
+  return `<div class="notice small install-banner no-print">📲 Use it like an app — add it to your home screen.
+    <button id="installBtn" class="primary">Add</button><button id="installNo" class="ghost">Not now</button></div>`;
+}
+function wireInstallBanner() {
+  const b = document.getElementById("installBtn"), n = document.getElementById("installNo");
+  if (b) b.onclick = showInstall;
+  if (n) n.onclick = () => { try { localStorage.setItem("mealplan-install-dismissed", "1"); } catch { /* ignore */ } n.closest(".install-banner").remove(); };
 }

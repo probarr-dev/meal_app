@@ -1250,3 +1250,13 @@ body:not([data-tab="plan"]):not([data-tab="shopping"]) .week-toggle { display:no
 body[data-tab="pricing"] main { max-width:1150px; }
 body[data-tab="pricing"] #modal > * { max-width:820px; }
 .shop-total-line { display:block; width:100%; text-align:center; border:none; color:var(--text); margin:-4px 0 12px; cursor:pointer; }
+
+.usual-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:-2px 0 12px; }
+.usualChip { border-radius:999px; padding:6px 12px; font-size:.85rem; min-height:36px;
+  background:color-mix(in srgb, var(--good) 12%, var(--card)); border:1px solid color-mix(in srgb, var(--good) 40%, var(--border)); }
+
+.install-banner { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.install-banner button { min-height:36px !important; width:auto !important; margin:0 !important; display:inline-block !important; }
+.install-steps { padding-left:20px; line-height:1.9; font-size:1rem; }
+.extra-row .shop-item .tag { display:inline-block; width:auto; margin-left:6px; vertical-align:middle; }
+.extra-row .shop-item .tag { align-self:flex-start; flex:0 0 auto; }
