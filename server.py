@@ -1373,7 +1373,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "enabled": push.AVAILABLE, "key": key,
                 "kinds": push.KINDS,
                 "off": [r["kind"] for r in conn.execute("SELECT kind FROM push_off WHERE person_id=?", (pid,))],
-                "reminderHour": push.reminder_hour(conn)})
+                "reminderHour": push.reminder_hour(conn),
+                "devices": conn.execute("SELECT COUNT(*) FROM push_sub WHERE person_id=?", (pid,)).fetchone()[0]})
 
         if path == "/api/week":
             wid = int(q["id"][0])

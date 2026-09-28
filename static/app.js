@@ -3579,21 +3579,23 @@ async function renderPushCard(p) {
   const card = document.getElementById("pushCard");
   if (!card) return;
   const st = await api.get(`/api/push/state?person_id=${p.id}`);
-  const supported = "serviceWorker" in navigator && "PushManager" in window && isSecureContext;
   if (!st.enabled) { card.innerHTML = `<p class="empty">Not available on this server.</p>`; return; }
-  if (!supported) {
-    card.innerHTML = `<p class="empty">${isSecureContext ? "This browser can't do notifications. On iPhone, add the app to your home screen first." : "Needs the https:// address."}</p>`;
-    return;
-  }
-  const sub = await currentSub();
-  const denied = Notification.permission === "denied";
+  const supported = "serviceWorker" in navigator && "PushManager" in window && isSecureContext;
+  const sub = supported ? await currentSub() : null;
+  const denied = supported && Notification.permission === "denied";
   const kinds = Object.entries(st.kinds).filter(([, k]) => !k.parents_only || p.role === "parent");
+  // Device-specific: this browser on/off. Person-wide: what to get, and a test
+  // that goes to every device they've switched on (e.g. test your phone from a laptop).
+  const here = !supported
+    ? (isSecureContext ? "can't do notifications in this browser (on iPhone, use the home-screen app)" : "needs the https:// address")
+    : denied ? "blocked — allow notifications for this app in the browser or phone settings" : sub ? "on" : "off";
   card.innerHTML = `
-    <div class="row"><span class="row-label">This device<span class="when">${denied ? "blocked — allow notifications for this app in your phone's settings" : sub ? "on" : "off"}</span></span>
-      ${denied ? "" : sub ? `<button id="pushOff" class="ghost">Turn off</button>` : `<button id="pushOn">Turn on</button>`}</div>
-    ${sub ? kinds.map(([k, v]) => `<label class="row"><span class="row-label">${esc(v.label)}</span>
+    <div class="row"><span class="row-label">This device<span class="when">${here}</span></span>
+      ${!supported || denied ? "" : sub ? `<button id="pushOff" class="ghost">Turn off</button>` : `<button id="pushOn">Turn on</button>`}</div>
+    ${st.devices ? `<p class="hint">On for you on ${st.devices} device${st.devices === 1 ? "" : "s"}.</p>`
+      + kinds.map(([k, v]) => `<label class="row"><span class="row-label">${esc(v.label)}</span>
       <input type="checkbox" class="pushKind" data-k="${k}" ${st.off.includes(k) ? "" : "checked"}></label>`).join("")
-      + `<div class="add-extra"><button id="pushTest" class="ghost">Send a test</button></div>` : ""}
+      + `<div class="add-extra"><button id="pushTest" class="ghost">Send a test to my devices</button></div>` : ""}
     ${isAdmin() ? `<label class="row"><span class="row-label">Voting reminder time<span class="when">for everyone: children who haven't voted after a day get one nudge</span></span>
       <select id="pushHour"><option value="-1" ${st.reminderHour < 0 ? "selected" : ""}>Off</option>${Array.from({ length: 24 }, (_, h) =>
         `<option value="${h}" ${st.reminderHour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select></label>` : ""}`;
