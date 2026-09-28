@@ -2117,6 +2117,7 @@ async function viewVote() {
       <h1>Vote ${meBadge()}</h1>
       <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}${parent ? ` <button id="voteTargetToggle" class="inline-edit" aria-expanded="false" aria-label="Change which week we're voting for" title="Change which week">✏️</button>` : ""}</span></header>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
+    ${parent && S.votingOpen ? `<button id="remindVoters" class="ghost" style="display:block;margin:0 auto 10px">🔔 Remind everyone who hasn't voted</button>` : ""}
     ${S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
     ${parent ? `<div class="add-options hidden" id="voteTargetOptions">
       <label class="mini"><span>Vote on</span>
@@ -2240,6 +2241,15 @@ async function viewVote() {
   const finalizeToggle = document.getElementById("voteFinalizeToggle");
   if (finalizeToggle) finalizeToggle.onclick = () => { S.voteFinalizeOpen = !S.voteFinalizeOpen; viewVote(); };
   wireFinalizePanel(voteWeekId);
+  const rv = document.getElementById("remindVoters");
+  if (rv) rv.onclick = busy(rv, async () => {
+    try {
+      const r = await api.post("/api/push/remind", { week_id: voteWeekId, actor_id: S.meId });
+      const off = r.unreachable.length ? `${r.unreachable.join(", ")} ${r.unreachable.length === 1 ? "hasn't" : "haven't"} turned notifications on` : "";
+      toast(!r.names.length && !off ? "Everyone's voted already 🎉"
+        : r.names.length ? `Reminded ${r.names.join(", ")}${off ? `. ${off}` : ""}.` : `Nobody could be reminded: ${off}.`, "good", 7000);
+    } catch (e) { toast(e.message, "bad"); }
+  });
   document.querySelectorAll(".vote-type-filter .tagf").forEach((b) => (b.onclick = () => {
     S.voteTypeFilter = b.dataset.typef; viewVote();
   }));

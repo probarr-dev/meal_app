@@ -2583,6 +2583,21 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
+        if path == "/api/push/remind":
+            # A parent's "nudge now": everyone (but them) with no vote in that week yet.
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            todo = rows(conn.execute("""
+                SELECT p.id, p.name FROM person p WHERE p.is_placeholder=0 AND p.id!=?
+                AND NOT EXISTS (SELECT 1 FROM meal_vote v WHERE v.week_id=? AND v.person_id=p.id)""",
+                (self.me["id"], b["week_id"])))
+            subbed = {r["person_id"] for r in conn.execute("SELECT DISTINCT person_id FROM push_sub")}
+            push.notify(conn, db, [t["id"] for t in todo], "voting_reminder", "Don't forget to vote 🗳️",
+                        f"{self.me['name']} is waiting on your picks for next week.", "/#/vote")
+            return self.send_json({"ok": True,
+                                   "names": [t["name"] for t in todo if t["id"] in subbed],
+                                   "unreachable": [t["name"] for t in todo if t["id"] not in subbed]})
+
         if path == "/api/push/test":
             n = push.notify(conn, db, [b["person_id"]], "test", "It works 🎉",
                             "Notifications are on for this device.", "/#/settings")
