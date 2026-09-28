@@ -8,6 +8,7 @@ import math
 import os
 import re
 import sqlite3
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -630,7 +631,11 @@ def morrisons_search(term):
             raw = __import__("gzip").decompress(raw)
         html = raw.decode("utf-8", "replace")
     m = re.search(r"window\.__INITIAL_STATE__=(\{.*?\})(?:;|\s*</script>)", html, re.S)
-    ents = json.loads(m.group(1))["data"]["products"]["productEntities"] if m else {}
+    if not m:
+        # Not a results page (a bot check or error page served as 200). Treat it
+        # like a block and don't cache it, or the empty answer sticks forever.
+        raise urllib.error.HTTPError(req.full_url, 429, "No results page", None, None)
+    ents = json.loads(m.group(1))["data"]["products"]["productEntities"]
     out = []
     for p in ents.values():
         try:
