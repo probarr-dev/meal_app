@@ -7,7 +7,7 @@
 
 <!-- Home screen / installable web app. iOS ignores the manifest's icons and
      only reads apple-touch-icon, so that PNG has to be listed separately. -->
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="manifest.json" crossorigin="use-credentials">
 <meta name="theme-color" content="#0f1115">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -34,7 +34,6 @@
     <a href="#/settings" data-tab="settings">Settings</a>
   </div>
   <div class="tab-right">
-    <select id="whoPicker" class="who-picker" title="Who are you?"></select>
     <div class="week-toggle" id="weekToggle">
       <button data-which="this">This Week</button>
       <button data-which="next">Next Week</button>

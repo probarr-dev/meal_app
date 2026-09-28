@@ -2,6 +2,7 @@
   "name": "Meal Planner",
   "short_name": "Meals",
   "description": "Weekly meal plan, shopping list and voting for the household.",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
