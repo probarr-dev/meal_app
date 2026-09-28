@@ -1260,3 +1260,163 @@ body[data-tab="pricing"] #modal > * { max-width:820px; }
 .install-steps { padding-left:20px; line-height:1.9; font-size:1rem; }
 .extra-row .shop-item .tag { display:inline-block; width:auto; margin-left:6px; vertical-align:middle; }
 .extra-row .shop-item .tag { align-self:flex-start; flex:0 0 auto; }
+
+.size-picker { display:flex; gap:6px; }
+.sizeBtn { min-width:44px; min-height:40px; padding:4px 10px; font-weight:700; border-radius:10px; }
+.sizeBtn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+.plan-edit-btn { min-height:36px; min-width:40px; padding:4px 8px; font-size:1.05rem; border-radius:8px; line-height:1; }
+.plan-edit-btn.on { background:var(--accent); border-color:var(--accent); }
+
+/* Today card: the one thing people open the app for, so it reads big. */
+.today-card .today-meal { font-size:1.55rem; font-weight:700; line-height:1.2; }
+.today-card .today-lunch { font-size:1.1rem; }
+.today-card .today-lunch .meal-peek { font-size:1.2rem; font-weight:700; }
+.today-card .today-lunch .meal-peek { font-size:1.55rem; }
+.today-card .today-ings li, .today-card .today-ings.sub li { font-size:1.02rem; padding:4px 0; }
+.today-card .today-ings .pk-qty { min-width:78px; }
+.today-card .today-ings li, .today-card .today-ings.sub li { padding:3px 0; }
+
+/* Today card: fold-out ingredients */
+.today-det summary { list-style:none; cursor:pointer; }
+.today-det summary::-webkit-details-marker { display:none; }
+.today-line { display:flex; align-items:baseline; gap:8px; margin:6px 0 2px; }
+.today-name { font-size:1.55rem; font-weight:700; }
+.today-arrow { margin-left:auto; font-size:1.2rem; color:var(--muted); transition:transform .15s ease; }
+.today-det[open] .today-arrow { transform:rotate(180deg); }
+.today-card .today-ings li, .today-card .today-ings.sub li { font-size:1.18rem; padding:3px 0; }
+.today-card .today-ings .pk-qty { min-width:88px; }
+.today-line .today-lunch { border:none; padding:0; margin:0; }
+.today-name, .today-line .today-meal { color:var(--text); }
+.today-card > .today-det, .today-card > .today-line { border-top:1px solid var(--border); padding-top:10px; margin-top:10px; }
+.today-card > .today-when + .today-det, .today-card > .today-when + .today-line { border-top:none; margin-top:4px; padding-top:0; }
+
+.today-arrow { font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size:1rem; }
+
+/* Compact view (per person, per device): same text sizes, tighter spacing. */
+.compact main { padding-top:8px; }
+.compact .card { padding:8px 10px; margin-bottom:8px; }
+.compact .card .row, .compact .shop-row, .compact .extra-row { padding-top:4px !important; padding-bottom:4px !important; }
+.compact .notice { padding:8px 11px; margin-bottom:8px; }
+.compact .block-head { margin-bottom:6px; }
+.compact .tl-day { padding-bottom:6px; }
+.compact .tl-day .tl-meta { margin-bottom:0; }
+.compact .today-card { padding:10px 14px; }
+.compact .today-card .today-ings li { padding:1px 0; }
+.compact .today-card > .today-det, .compact .today-card > .today-line { padding-top:6px; margin-top:6px; }
+.compact .vote-row { padding-top:4px; padding-bottom:4px; }
+.compact .meal-card { margin-bottom:8px; }
+.compact .sec-title { margin-top:16px; }
+/* Timeline: lunch sits tight above dinner (the 40px phone tap-size rule was padding them apart). */
+.tl-title { row-gap:0; }
+.tl-title .tl-lunch { margin:0 0 -2px; line-height:1.3; }
+.tl-title .tl-lunch button, .tl-title .simple-meal { min-height:0 !important; padding-top:1px; padding-bottom:1px; }
+.tl-lunch-row { margin:0 0 2px; }
+/* iPhone home-screen app: stop the rubber-band bounce dragging the fixed bottom menu. */
+html, body { overscroll-behavior-y:none; }
+@media (max-width:560px) {
+  .tab-links { -webkit-transform:translateZ(0); transform:translateZ(0); will-change:transform; }
+}
+
+/* Noteworthy (iPhone's notepad font) has very tall built-in line spacing;
+   pin the line height so the Today card spacing is the same on every device. */
+.today-card .today-line, .today-card .today-name, .today-card .today-meal,
+.today-card .today-lunch, .today-card .today-when { line-height:1.15; }
+.today-card .today-line { margin:4px 0 0; }
+.tl-day .tl-meta, .tl-title, .tl-title .simple-meal, .tl-title .tl-lunch { line-height:1.2; }
+/* iOS home-screen apps only use the full screen height while the page can
+   scroll; a short page (e.g. compact Plan) shrinks the viewport and strands
+   the fixed bottom menu above the screen edge. Keep the page 1px taller than
+   the largest viewport so it's always scrollable. */
+body { min-height:calc(100vh + 1px); min-height:calc(100lvh + 1px); }
+
+/* ---- Shopping list: tighter rows (name + price on one line, meals/aisle under) ---- */
+.shop-row { padding:6px 4px; gap:10px; }
+.aisle-items .shop-row:first-child { margin-top:2px; }
+.shop-item { flex-direction:row; flex-wrap:wrap; align-items:baseline; column-gap:8px; row-gap:0; }
+.shop-item .shop-name { line-height:1.2; }
+.shop-item .shop-price { margin-left:0; }
+.shop-item .shop-meta { flex-basis:100%; line-height:1.25; font-size:.72rem; }
+.shop-row input[type=checkbox] { width:24px; height:24px; min-width:24px; }
+.shop-row .qty { line-height:1.2; }
+.aisle h3 { margin:10px 0 0; }
+.all-done { display:flex; align-items:center; justify-content:center; gap:10px; text-align:left; padding:8px 12px 12px; }
+.all-done .all-done-tick { width:30px; height:30px; min-width:30px; font-size:1rem; margin:0; }
+.all-done p { font-size:.85rem; }
+.trolley-card h3, .trolley-card .hint { margin-top:0; margin-bottom:2px; }
+.compact .shop-row { padding:3px 2px !important; }
+.shop-item .shop-meta { flex-wrap:nowrap; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; display:block; }
+.shop-item .shop-meta > * { display:inline; }
+.shop-item .shop-meta > * + * { margin-left:8px; }
+.shop-row { padding:4px 4px; }
+.shop-meta button, .shop-source-btn { min-height:0 !important; padding:0 !important; line-height:1.25; }
+
+.vote-emojis { font-size:.9em; letter-spacing:.08em; white-space:nowrap; }
+.veto-btn { font-size:1.15rem; min-width:40px; }
+
+.inline-edit { background:none; border:none; padding:0 2px; min-height:0 !important; font-size:.95em; cursor:pointer; vertical-align:baseline; }
+.finalize-toggle { position:static !important; width:100%; margin:4px 0 10px; }
+.finalize-toggle.open { min-height:40px; border-radius:12px; }
+.winner-box .overview-row { padding:9px 4px; font-size:1rem; gap:10px; align-items:center; border-bottom:1px solid var(--border); }
+.winner-box .overview-row input[type=checkbox] { width:22px; height:22px; flex:0 0 auto; }
+.winner-box .field input { font-size:1rem; }
+
+.vote-body { display:flex; flex-direction:column; gap:3px; }
+.vote-who { display:flex; gap:4px; align-items:center; }
+.voter-chip { display:inline-flex; align-items:center; justify-content:center; width:1.35rem; height:1.35rem;
+  border-radius:50%; color:#fff; font:700 .72rem/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.vetoed-note { font-size:.8rem; color:var(--bad); font-weight:600; }
+.ov-name .vote-who { display:inline-flex; margin-left:6px; vertical-align:middle; }
+
+.voter-emoji { font-size:1.15rem; line-height:1; }
+.icon-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(48px, 1fr)); gap:6px; }
+.icon-grid .iconPick { font-size:1.6rem; min-height:48px; padding:0; border-radius:12px; }
+.icon-current { display:inline-flex; align-items:center; gap:6px; font-size:.9rem; }
+/* Pop-ups clear the status bar/notch and sit a little down the screen. */
+.modal { padding-top:calc(24px + env(safe-area-inset-top, 0px)); padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px)); }
+/* Icon picker: calmer, tighter grid; no notepad margin line through it. */
+.modal-card:has(.icon-grid) { background-image:none !important; padding-left:18px !important; max-width:420px; }
+.icon-grid { grid-template-columns:repeat(8, 1fr); gap:4px; }
+.icon-grid .iconPick { font-size:1.35rem; min-height:40px !important; border:none; background:transparent; border-radius:10px; }
+.icon-grid .iconPick:hover, .icon-grid .iconPick:active { background:color-mix(in srgb, var(--accent) 14%, transparent); }
+@media (max-width:420px) { .icon-grid { grid-template-columns:repeat(6, 1fr); } }
+.icon-own { display:flex; gap:8px; margin-top:12px; }
+.icon-own input { flex:1; font-size:1.1rem; }
+/* iPhone zooms into any field under 16px and stays zoomed; keep fields at 16px+ on phones. */
+@media (max-width:560px) {
+  input, select, textarea { font-size:max(16px, 1rem) !important; }
+}
+
+.person-line { align-items:center; gap:10px; padding:8px 0; }
+.person-line .row-label { flex:1; }
+.person-icon { font-size:1.4rem; width:1.6rem; text-align:center; }
+.personMenu { font-size:1.2rem; font-weight:700; padding:2px 12px; min-height:36px !important; }
+.sheet-swatches { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:6px; }
+.person-row-full { border-bottom:1px solid var(--border); }
+.person-row-full:last-of-type { border-bottom:none; }
+/* My colour: description under the label instead of squeezed beside swatches */
+.row:has(.color-swatches) { flex-wrap:wrap; }
+.row:has(.color-swatches) .row-label { flex-basis:100%; }
+
+/* No top bar any more: who-you-are lives in Settings/Rewards, week switch in the page title. */
+.tab-right { display:none !important; }
+@media (max-width:560px) {
+  .tabs { padding:0 !important; border:none !important; background:none !important; position:static !important; min-height:0; }
+  main { padding-top:calc(14px + env(safe-area-inset-top, 0px)); }
+}
+.week-nav { display:inline-flex; align-items:center; gap:2px; }
+.weekNavBtn { background:none; border:none; font-size:1.3rem; line-height:1; padding:0 8px; min-height:32px !important; color:var(--accent); cursor:pointer; }
+.weekNavBtn:disabled { color:var(--border); cursor:default; }
+.block-head .actions { display:flex; gap:6px; }
+.me-badge { display:inline-flex; align-items:center; justify-content:center; font-size:1.05rem; min-width:1.5rem; height:1.5rem;
+  border-radius:50%; background:color-mix(in srgb, var(--accent) 15%, transparent); vertical-align:middle; }
+
+.meal-card.needs-ings { outline:2px dashed var(--low); outline-offset:-2px; }
+.dupes h3 { margin:0 0 4px; }
+.dup-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border); }
+.dup-names { flex:1 1 280px; }
+.dup-acts { display:flex; flex-wrap:wrap; gap:6px; }
+.link-btn { background:none; border:none; padding:0; font:inherit; font-weight:600; color:inherit; cursor:pointer; text-align:left; min-height:0 !important; }
+.use-row { display:flex; gap:6px; align-items:center; padding:5px 0; border-bottom:1px solid var(--border); }
+.use-meal { flex:1; min-width:0; }
+.use-row .useAmt { width:80px; }

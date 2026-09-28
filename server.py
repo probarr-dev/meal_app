@@ -37,6 +37,12 @@ def db():
     return conn
 
 
+def migrate_adults_only(conn):
+    if not conn.execute("SELECT 1 FROM config WHERE key='adults_only_seeded'").fetchone():
+        conn.execute("UPDATE extra SET adults_only=1 WHERE aisle='Household'")
+        conn.execute("INSERT OR IGNORE INTO config(key,value) VALUES ('adults_only_seeded','1')")
+
+
 def migrate(conn):
     """Additive, idempotent. Safe to run on every boot."""
     def cols(table):
@@ -91,6 +97,9 @@ def migrate(conn):
         # — replaces the old fixed Friday-5pm deadline entirely.
         ("week", "confirmed", "INTEGER DEFAULT 0"),
         ("person", "color", "TEXT"),
+        ("person", "emoji", "TEXT"),
+        ("extra", "adults_only", "INTEGER DEFAULT 0"),
+        ("meal", "no_ingredients", "INTEGER DEFAULT 0"),
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
@@ -408,6 +417,7 @@ def init_db():
     with db() as conn:
         conn.executescript(open(os.path.join(HERE, "schema.sql")).read())
         migrate(conn)
+        migrate_adults_only(conn)
         conn.commit()
 
 
@@ -1014,10 +1024,12 @@ class Handler(SimpleHTTPRequestHandler):
                                    "estimate": add_estimate(conn, groups)})
 
         if path == "/api/pricing/items":
-            items = {}
-            for r in rows(conn.execute("""SELECT mi.item, m.name AS meal FROM meal_ingredient mi
-                                          JOIN meal m ON m.id=mi.meal_id WHERE m.deleted_at IS NULL""")):
-                items.setdefault(item_key(r["item"]), set()).add(r["meal"])
+            items, uses = {}, {}
+            for r in rows(conn.execute("""SELECT mi.id, mi.item, mi.amount, mi.unit, m.name AS meal FROM meal_ingredient mi
+                                          JOIN meal m ON m.id=mi.meal_id WHERE m.deleted_at IS NULL ORDER BY m.name""")):
+                k = item_key(r["item"])
+                items.setdefault(k, set()).add(r["meal"])
+                uses.setdefault(k, []).append({"id": r["id"], "meal": r["meal"], "amount": r["amount"], "unit": r["unit"]})
             for r in rows(conn.execute("SELECT item FROM extra")):
                 items.setdefault(item_key(r["item"]), set()).add("Extras")
             links = price_links(conn)
@@ -1027,7 +1039,7 @@ class Handler(SimpleHTTPRequestHandler):
                     continue
                 prods = links.get(k, [])
                 live = [p["price"] for p in prods if not p["missing"]]
-                out.append({"key": k, "meals": sorted(items[k]), "products": prods,
+                out.append({"key": k, "meals": sorted(items[k]), "products": prods, "uses": uses.get(k, []),
                             "low": min(live) if live else None, "high": max(live) if live else None})
             last = conn.execute("SELECT MAX(checked_at) c FROM price_product").fetchone()["c"]
             return self.send_json({"items": out, "lastChecked": last})
@@ -1441,6 +1453,8 @@ class Handler(SimpleHTTPRequestHandler):
                     (b["name"], b.get("carb_flag", "ok"), b.get("note", ""), b.get("tags", ""), mtype,
                      int(b.get("recurring") or 0), b.get("person_id") or None))
                 mid = cur.lastrowid
+            if "no_ingredients" in b:
+                conn.execute("UPDATE meal SET no_ingredients=? WHERE id=?", (int(b["no_ingredients"]), mid))
             for i in b.get("ingredients", []):
                 if not i.get("item"):
                     continue
@@ -1651,6 +1665,8 @@ class Handler(SimpleHTTPRequestHandler):
                               int(b.get("recurring", 0)), float(b.get("amount") or 1),
                               b.get("unit", "unit"), b["id"]))
                 eid = b["id"]
+                if "adults_only" in b:
+                    conn.execute("UPDATE extra SET adults_only=? WHERE id=?", (int(b["adults_only"]), eid))
             else:
                 # Same item typed again just bumps frequency rather than
                 # duplicating the row — that's what the maintained list sorts by.
@@ -1797,6 +1813,39 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
+        if path == "/api/pricing/ingredient":
+            conn.execute("UPDATE meal_ingredient SET amount=?, unit=? WHERE id=?",
+                         (float(b["amount"]), b["unit"], b["id"]))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/pricing/merge":
+            # Fold one item name into another everywhere it's used: meal
+            # ingredients, extras (combining week lists), and Aldi links.
+            src, dst = item_key(b["from"]), item_key(b["to"])
+            if not src or not dst or src == dst:
+                return self.send_json({"error": "Pick two different items."}, 400)
+            n = 0
+            for r in rows(conn.execute("SELECT id, item FROM meal_ingredient")):
+                if item_key(r["item"]) == src:
+                    conn.execute("UPDATE meal_ingredient SET item=? WHERE id=?", (dst, r["id"])); n += 1
+            target = next((r for r in rows(conn.execute("SELECT id, item FROM extra")) if item_key(r["item"]) == dst), None)
+            for r in rows(conn.execute("SELECT id, item FROM extra")):
+                if item_key(r["item"]) != src:
+                    continue
+                if target:
+                    conn.execute("""INSERT OR IGNORE INTO week_extra(week_id,extra_id,qty)
+                                    SELECT week_id, ?, qty FROM week_extra WHERE extra_id=?""", (target["id"], r["id"]))
+                    conn.execute("DELETE FROM week_extra WHERE extra_id=?", (r["id"],))
+                    conn.execute("DELETE FROM extra WHERE id=?", (r["id"],))
+                else:
+                    conn.execute("UPDATE extra SET item=? WHERE id=?", (dst, r["id"]))
+                n += 1
+            conn.execute("UPDATE OR IGNORE price_product SET item_key=? WHERE item_key=?", (dst, src))
+            conn.execute("DELETE FROM price_product WHERE item_key=?", (src,))
+            conn.commit()
+            return self.send_json({"ok": True, "changed": n})
+
         if path == "/api/pricing/unlink":
             conn.execute("DELETE FROM price_product WHERE id=?", (b["id"],))
             conn.commit()
@@ -1887,7 +1936,7 @@ class Handler(SimpleHTTPRequestHandler):
             # Cosmetic, per-person preferences. Safe for anyone to set on
             # themselves, and for an admin to set on someone else (a kid
             # without Settings access still gets a colour picked for them).
-            OWN_FIELDS = ("theme", "color")
+            OWN_FIELDS = ("theme", "color", "emoji")
             # Everything that changes what someone is allowed to DO. The UI
             # already hides these behind the admin check; without the same
             # check here, a POST straight to the API could set role='parent'
@@ -1924,6 +1973,8 @@ class Handler(SimpleHTTPRequestHandler):
                     conn.execute("UPDATE person SET allowed_tabs=? WHERE id=?",
                                  (b["allowed_tabs"] or None, b["id"]))
 
+                if b.get("emoji"):
+                    b["emoji"] = str(b["emoji"])[:16]
                 editable = OWN_FIELDS + (ADMIN_FIELDS if admin else ())
                 sets = ", ".join(f"{f}=?" for f in editable if f in b and f != "is_admin"
                                  and f != "allowed_tabs")

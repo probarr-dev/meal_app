@@ -122,7 +122,19 @@ function hexToHsl(hex) {
 // A whole coordinated dark palette built from one picked colour — background,
 // cards and borders all tinted with its hue, not just the accent. That's
 // what actually reads as "my colour scheme" rather than "my button colour".
+const TEXT_SIZES = [["S", 90], ["M", 100], ["L", 112], ["XL", 125]];
+function textSizeKey() { return `mealplan-textsize-${S.meId || "anon"}`; }
+function applyTextSize() {
+  let pct = 100, compact = false;
+  try {
+    pct = +localStorage.getItem(textSizeKey()) || 100;
+    compact = localStorage.getItem(`mealplan-compact-${S.meId || "anon"}`) === "1";
+  } catch { /* ignore */ }
+  document.documentElement.style.fontSize = `${pct}%`;
+  document.documentElement.classList.toggle("compact", compact);
+}
 function applyTheme() {
+  applyTextSize();
   const p = me();
   document.documentElement.dataset.funTheme = p?.theme === "fun" ? "1" : "0";
   document.documentElement.dataset.notepad = p?.theme === "notepad" ? "1" : "0";
@@ -140,6 +152,7 @@ function applyTheme() {
 
 // Any failure here must be visible. A silent catch means clicking a tab
 // appears to do nothing, which is impossible to diagnose from the outside.
+const scroller = () => document.scrollingElement;
 function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full or blocked */ } }
 const pendingTicks = () => lsGet("mealplan-pending-ticks") || [];
@@ -408,6 +421,33 @@ const fmtWeekRange = (startISO) => {
 // Which week you're looking at is the first thing to establish on all three
 // step pages, so it gets its own centred line at a readable size rather than
 // a small grey aside next to the title (or, on Shopping, buried in prose).
+// Date in the page title doubles as the This/Next week switch.
+const weekNavHTML = (startISO) => {
+  if (!startISO) return "";
+  const onNext = S.weekId === S.nextWeekId;
+  return `<span class="week-range week-nav">
+    <button class="weekNavBtn" data-to="this" ${onNext ? "" : "disabled"} aria-label="This week">‹</button>
+    ${esc(fmtWeekRange(startISO))}
+    <button class="weekNavBtn" data-to="next" ${onNext ? "disabled" : ""} aria-label="Next week">›</button></span>`;
+};
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".weekNavBtn");
+  if (!b || b.disabled) return;
+  S.weekId = b.dataset.to === "next" ? S.nextWeekId : S.thisWeekId;
+  route();
+});
+// Pick who's using this phone (replaces the old top-bar name chooser).
+function switchPerson() {
+  openModal("Who's using the app?", `<div class="action-sheet">${S.people.filter((p) => !p.is_placeholder).map((p) =>
+    `<button class="sheetBtn switchTo" data-id="${p.id}">${p.emoji ? esc(p.emoji) : "🙂"} ${esc(p.name)}${p.id === S.meId ? " ✓" : ""}</button>`).join("")}</div>`);
+  document.querySelectorAll(".switchTo").forEach((b) => (b.onclick = async () => {
+    closeModal();
+    if (+b.dataset.id === S.meId) return;
+    if (await selectPerson(+b.dataset.id)) { await boot(); }
+  }));
+}
+const meBadge = () => me() ? `<span class="me-badge" title="Signed in as ${esc(me().name)}">${me().emoji ? esc(me().emoji) : esc(me().name[0])}</span>` : "";
+
 const weekBannerHTML = (startISO) =>
   startISO ? `<span class="week-range">${esc(fmtWeekRange(startISO))}</span>` : "";
 
@@ -425,6 +465,49 @@ async function askShopTotal(weekId, current) {
   if (r.error) { toast(r.error, "bad"); return false; }
   return true;
 }
+
+// One coloured initial per voter (their own colour from Settings): the count
+// and who, at a glance, in less room than "2 votes · Alex, Sam".
+const VOTER_FALLBACK = ["#4f8cff", "#e0553c", "#3ec97a", "#e0a83c", "#9a5fc8", "#2fb3b3"];
+function voterChips(voters) {
+  return String(voters || "").split(",").map((n) => n.trim()).filter(Boolean).map((n) => {
+    const p = S.people.find((x) => x.name === n);
+    const col = p?.color || VOTER_FALLBACK[(p?.id || n.length) % VOTER_FALLBACK.length];
+    if (p?.emoji) return `<span class="voter-emoji" title="${esc(n)}" aria-label="${esc(n)}">${esc(p.emoji)}</span>`;
+    return `<span class="voter-chip" style="background:${col}" title="${esc(n)}" aria-label="${esc(n)}">${esc(n[0].toUpperCase())}</span>`;
+  }).join("");
+}
+const ICON_CHOICES = ["🦊","🐼","🐯","🦁","🐸","🐵","🐶","🐱","🐰","🐻","🐨","🦄","🐙","🦖","🐝","🦋","🐧","🦉","🐬","🦈",
+  "⭐","🌈","🔥","⚡","🌙","☀️","🍀","🌸","🍕","🍩","🍓","🍉","⚽","🏀","🎮","🎸","🚀","🚗","👑","💎"];
+function pickIcon(personId, asAdmin) {
+  openModal("Pick an icon", `<div class="icon-grid">${ICON_CHOICES.map((e) =>
+    `<button class="iconPick" data-e="${e}">${e}</button>`).join("")}</div>
+    <div class="icon-own"><input id="iconOwn" placeholder="Or type any emoji…" maxlength="16" autocomplete="off">
+      <button id="iconOwnGo" class="primary">Use</button></div>
+    <div class="modal-actions"><button class="iconPick ghost" data-e="">Use my initial instead</button></div>`);
+  const save = async (e) => {
+    const res = await api.post("/api/person", { id: personId, ...(asAdmin ? { admin_id: S.meId } : { actor_id: S.meId }), emoji: e || null });
+    if (res.error) return toast(res.error, "bad");
+    closeModal(); await boot();
+  };
+  const go = document.getElementById("iconOwnGo");
+  go.onclick = busy(go, async () => {
+    const v = document.getElementById("iconOwn").value.trim();
+    // Keep just the first character a person would see (an emoji can be several code points).
+    const first = v ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(v)][0].segment : "";
+    if (!first) return toast("Type an emoji first.", "bad");
+    await save(first);
+  });
+  document.querySelectorAll(".iconPick").forEach((b) => (b.onclick = busy(b, () => save(b.dataset.e))));
+}
+const TAG_EMOJI = { "Healthy": "🥦", "Kids' favourite": "⭐", "Quick": "⚡", "Low carb": "🥗", "Batch cook": "🍲", "Treat": "🍰" };
+const tagEmojis = (m) => {
+  const bits = [];
+  if (m.draft) bits.push(["🆕", "New"]);
+  if (m.v?.chosen) bits.push(["✅", "On the shortlist"]);
+  (m.tags || "").split(",").filter(Boolean).forEach((t) => bits.push([TAG_EMOJI[t] || "🏷️", t]));
+  return bits.length ? ` <span class="vote-emojis">${bits.map(([e, t]) => `<span title="${esc(t)}" aria-label="${esc(t)}">${e}</span>`).join("")}</span>` : "";
+};
 
 const weekWords = (id) => (id === S.thisWeekId ? "this week" : id === S.nextWeekId ? "next week" : "the week of");
 
@@ -462,7 +545,7 @@ const mealNeedsIngredients = (mealId) => {
   const m = S.meals.find((x) => x.id === mealId);
   // Takeaway/eating-out is deliberately empty — that's not a meal someone
   // forgot to finish writing, it's correctly never going to have ingredients.
-  return !!m && !mealHasType(m, "takeaway") && (!m.ingredients || !m.ingredients.length);
+  return !!m && !m.no_ingredients && !mealHasType(m, "takeaway") && (!m.ingredients || !m.ingredients.length);
 };
 const ingredientsWarningHTML = (needsIt) =>
   needsIt ? `<span class="tag tag-warn" title="No ingredients yet — can't go on the shopping list until someone fills them in">⚠ no ingredients</span>` : "";
@@ -743,6 +826,7 @@ function route() {
   document.querySelectorAll(".tabs a").forEach((a) =>
     a.classList.toggle("active", a.dataset.tab === tab));
   document.body.dataset.tab = tab;
+
   const view = {
     plan: viewPlan, meals: viewMeals,
     vote: viewVote, shopping: viewShopping, extras: viewRegulars, pricing: viewPricing,
@@ -807,7 +891,7 @@ async function viewPlan() {
   // history — not just the days before today in the current one.
   const isPast = (dow) => dateOf(dow).getTime() < midnight.getTime();
   const pastCount = data.days.filter((d) => isPast(d.dow)).length;
-  const canEdit = (dow) => parent && (!isPast(dow) || S.allowHistoricEdits);
+  const canEdit = (dow) => parent && S.planEdit && (!isPast(dow) || S.allowHistoricEdits);
 
   // Colour is what makes a borderless list scannable — you find the day by
   // hue before you read a word of it. Meal type is the only categorical axis
@@ -856,23 +940,21 @@ async function viewPlan() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>Meal Plan</h1>
-      ${weekBannerHTML(data.week.start_date)}
-      <div class="actions">${parent ? `<a href="#/meals/new" class="btn-link" aria-label="Add meal" title="Add meal"><span aria-hidden="true">+</span><span class="btn-label">Add meal</span></a>` : ""}</div></header>
+      ${weekNavHTML(data.week.start_date)}
+      <div class="actions">${parent ? `<button id="planEditBtn" class="plan-edit-btn ${S.planEdit ? "on" : ""}" aria-label="Edit the plan" title="Edit the plan">✏️</button>` : ""}${parent ? `<a href="#/meals/new" class="btn-link" aria-label="Add meal" title="Add meal"><span aria-hidden="true">+</span><span class="btn-label">Add meal</span></a>` : ""}</div></header>
     ${parent ? cycleStripHTML("plan") : ""}
 
     ${today ? `
       <div class="today-card ${today.meal ? "" : "empty"}">
         <div class="today-when">Today · ${esc(DAYS[todayDow])} ${esc(dayNum(todayDow))}</div>
-        ${today.meal
-          ? `<button class="today-meal meal-peek" data-id="${today.meal.id}" title="See what's in it">${esc(today.meal.name)}</button>`
+        ${today.lunch ? todayLine("Lunch", today.lunch, true) : ""}
+        ${today.meal ? todayLine(today.lunch ? "Dinner" : "", today.meal, !!today.lunch)
           : `<div class="today-meal none">Nothing planned yet</div>`}
-        ${today.meal ? todayIngredientsHTML(today.meal.id) : ""}
-        ${today.lunch ? `<div class="today-lunch">Lunch · <button class="meal-peek" data-id="${today.lunch.id}">${esc(today.lunch.name)}</button></div>
-        ${todayIngredientsHTML(today.lunch.id, true)}` : ""}
       </div>` : ""}
 
 
-    ${parent && pool.pool.length ? `
+    ${parent && pool.pool.length && !S.planEdit ? `<button class="notice small no-print" style="display:block;width:100%;text-align:left;border:none;color:var(--text);cursor:pointer" onclick="document.getElementById('planEditBtn').click()">📌 ${pool.pool.length} meal${pool.pool.length === 1 ? "" : "s"} still need a day — tap ✏️ to place ${pool.pool.length === 1 ? "it" : "them"}.</button>` : ""}
+    ${parent && pool.pool.length && S.planEdit ? `
       <div class="notice attend-confirm">
         <strong>Not yet assigned to a day</strong>
         <p class="hint">Pick a day for each — cook the ones with fresher ingredients first, or whatever's quickest on a busy night.
@@ -1017,6 +1099,11 @@ async function viewPlan() {
       viewPlan();
     });
   });
+  const pe = document.getElementById("planEditBtn");
+  if (pe) pe.onclick = () => { S.planEdit = !S.planEdit; viewPlan(); };
+  document.querySelectorAll(".today-det").forEach((d) => (d.ontoggle = () => {
+    try { localStorage.setItem("mealplan-today-open", d.open ? "1" : "0"); } catch { /* ignore */ }
+  }));
   document.querySelectorAll(".dayMenu").forEach((b) => (b.onclick = () => {
     const dow = b.dataset.dow, meal = b.dataset.hasMeal === "1", lunch = b.dataset.hasLunch === "1";
     const opts = [
@@ -1074,12 +1161,25 @@ async function viewPlan() {
 // Straight into the Today card, no tap needed — the whole point of opening
 // this page is usually "what do I need out for tonight", and making that a
 // second step (peek modal) was exactly the friction being removed here.
+// One meal on the Today card: name on its own line, ingredients folded
+// behind an arrow (remembered open/closed on this phone). No arrow when
+// there's nothing to list, e.g. a takeaway.
+function todayLine(label, meal, inline) {
+  const ings = todayIngredientsHTML(meal.id, true);
+  const head = label ? `<span class="today-lunch">${esc(label)} · <span class="today-name">${esc(meal.name)}</span></span>`
+                     : `<span class="today-meal">${esc(meal.name)}</span>`;
+  if (!ings) return `<div class="today-line">${head}</div>`;
+  let open = false;
+  try { open = localStorage.getItem("mealplan-today-open") === "1"; } catch { /* ignore */ }
+  return `<details class="today-det" ${open ? "open" : ""}><summary class="today-line">${head}<span class="today-arrow" aria-hidden="true">▾</span></summary>${ings}</details>`;
+}
+
 function todayIngredientsHTML(mealId, sub = false) {
   const m = S.meals.find((x) => x.id === mealId);
   const ings = m?.ingredients || [];
   // Lunch is the secondary meal on the card — if it has nothing recorded, say
   // nothing rather than repeating an empty-state under the dinner's list.
-  if (!ings.length) return sub ? "" : `<p class="today-ings-empty">No ingredients recorded yet.</p>`;
+  if (!ings.length) return "";
   return `<ul class="today-ings${sub ? " sub" : ""}">${ings.map((i) =>
     `<li><span class="pk-qty">${esc(fmtIng(i))}</span><span>${esc(i.item)}</span></li>`).join("")}</ul>`;
 }
@@ -1161,6 +1261,7 @@ function extraEditor(extra) {
       <label class="mini"><span>Aisle in shop</span>
         <select id="exEditAisle">${aisleOpts}</select></label>
       <label class="inline"><input type="checkbox" id="exEditRec" ${extra.recurring ? "checked" : ""}> every week</label>
+      <label class="inline"><input type="checkbox" id="exEditAdult" ${extra.adults_only ? "checked" : ""}> grown-ups only (kids won't see it)</label>
     </div>
     <div class="modal-actions"><button id="exEditDel" class="ghost danger-text">Delete forever</button><button id="exEditSave" class="primary">Save</button></div>
   `);
@@ -1183,6 +1284,7 @@ function extraEditor(extra) {
       aisle: document.getElementById("exEditAisle").value,
       person_id: null,
       recurring: document.getElementById("exEditRec").checked ? 1 : 0,
+      adults_only: document.getElementById("exEditAdult").checked ? 1 : 0,
     });
     closeModal();
     viewRegulars();
@@ -1234,7 +1336,7 @@ async function viewShopping() {
     document.getElementById("view").innerHTML = `
       <header class="block-head">
         <h1>🧺 Cupboard check</h1>
-        ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
+        ${weekNavHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
       ${cycleStripHTML("shop")}
       <div class="notice good no-print pantry-intro">
         <strong>Step 1 of 2 — before you go.</strong><br>
@@ -1328,7 +1430,7 @@ async function viewShopping() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>🛒 Shopping List</h1>
-      ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}
+      ${weekNavHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}
       <div class="actions no-print">
         <button id="copyBtn" class="desktop-only" aria-label="Copy list" title="Copy list"><span aria-hidden="true">📋</span><span class="btn-label">Copy</span></button>
         ${navigator.share ? `<button id="shareBtn" aria-label="Export list" title="Export list"><span aria-hidden="true">📤</span><span class="btn-label">Export…</span></button>` : ""}
@@ -1724,7 +1826,8 @@ async function viewRegulars() {
   // Always the next shop you'll do: this week's until it's marked done.
   const weekId = shopWeekId;
   const parent = isParent();
-  const { extras, requests = [] } = await api.get(`/api/extras?week_id=${weekId}`);
+  let { extras, requests = [] } = await api.get(`/api/extras?week_id=${weekId}`);
+  if (!parent) extras = extras.filter((e) => !e.adults_only);
   const myAsk = {};
   if (!parent) requests.filter((r) => r.person_id === S.meId)
     .forEach((r) => { myAsk[r.item.toLowerCase()] = r.amount | 0; });
@@ -1757,7 +1860,7 @@ async function viewRegulars() {
             <span class="extra-qty-val">${qty || "0"}</span>
             <button class="stepBtn stepPlus" data-id="${e.id}" data-qty="${qty + 1}" title="One more">+</button>
           </div>
-          <span class="shop-item">${esc(e.item)}${e.recurring ? ` <span class="tag tag-protein">weekly</span>` : ""}</span>
+          <span class="shop-item">${esc(e.item)}${e.recurring ? ` <span class="tag tag-protein">weekly</span>` : ""}${parent && e.adults_only ? ` <span title="Grown-ups only" aria-label="Grown-ups only">🔒</span>` : ""}</span>
           ${parent ? `<span class="extra-actions">
             <button class="editExtra ghost" data-id="${e.id}" aria-label="Edit name, amount, aisle" title="Edit">✏️</button>
 
@@ -1787,7 +1890,7 @@ async function viewRegulars() {
       await viewRegulars();
       const again = [...document.querySelectorAll(selector)]
         .find((x) => x.dataset.id === id && x.className === cls);
-      if (again) window.scrollBy(0, Math.round(again.getBoundingClientRect().top - before));
+      if (again) scroller().scrollBy(0, Math.round(again.getBoundingClientRect().top - before));
     })));
 
   document.querySelectorAll(".usualChip").forEach((b) => (b.onclick = busy(b, async () => {
@@ -1855,9 +1958,10 @@ async function viewMeals() {
       </div>
     </div>
 
+    ${parent && shown.some((m) => mealNeedsIngredients(m.id)) ? `<p class="notice small warn">⚠️ ${shown.filter((m) => mealNeedsIngredients(m.id)).length} meal${shown.filter((m) => mealNeedsIngredients(m.id)).length === 1 ? "" : "s"} need ingredients — shown first. Tap one to add them, or tick "No ingredients needed" (e.g. a takeaway).</p>` : ""}
     <div class="meal-grid">
-      ${shown.map((m) => `
-        <div class="meal-card" data-id="${m.id}">
+      ${[...shown].sort((x, y) => (mealNeedsIngredients(y.id) ? 1 : 0) - (mealNeedsIngredients(x.id) ? 1 : 0)).map((m) => `
+        <div class="meal-card ${parent && mealNeedsIngredients(m.id) ? "needs-ings" : ""}" data-id="${m.id}">
           ${m.has_photo ? `<img class="meal-photo" loading="lazy" alt="" src="/api/meal-photo?id=${m.id}&v=${S.photoV || 0}">` : ""}
           <div class="meal-card-main">
             <div class="meal-card-head">
@@ -1935,6 +2039,7 @@ function mealEditor(meal) {
 
   openModal(meal ? "Edit meal" : "New meal", `
     <label class="field"><span>Meal name</span><input id="mName" value="${esc(m.name)}"></label>
+    <label class="inline" style="display:block;margin:-4px 0 10px"><input type="checkbox" id="mNoIng" ${m.no_ingredients ? "checked" : ""}> No ingredients needed (e.g. takeaway, eating out)</label>
     <div class="field"><span>What kind of meal is this?</span>
       <div class="tag-picker">
         ${MEAL_TYPES.map(([val, label]) => `<label class="inline tag-opt">
@@ -2053,6 +2158,7 @@ function mealEditor(meal) {
     const res = await api.post("/api/meal", {
       id: m.id, actor_id: S.meId, name,
       meal_type, tags, ingredients, recurring, person_id,
+      no_ingredients: document.getElementById("mNoIng")?.checked ? 1 : 0,
     });
     if (res.error) return toast(res.error, "bad");
     closeModal();
@@ -2105,12 +2211,11 @@ async function viewVote() {
 
   document.getElementById("view").innerHTML = `
     <header class="block-head">
-      <h1>Vote</h1>
-      <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
+      <h1>Vote ${meBadge()}</h1>
+      <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}${parent ? ` <button id="voteTargetToggle" class="inline-edit" aria-expanded="false" aria-label="Change which week we're voting for" title="Change which week">✏️</button>` : ""}</span></header>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
     ${S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
-    ${parent ? `<button id="voteTargetToggle" class="link-toggle" style="margin-bottom:8px" aria-expanded="false">Voting on the wrong week?</button>
-    <div class="add-options hidden" id="voteTargetOptions">
+    ${parent ? `<div class="add-options hidden" id="voteTargetOptions">
       <label class="mini"><span>Vote on</span>
         <select id="voteTargetSel">${S.weeks
           .slice().sort((a, b) => a.start_date.localeCompare(b.start_date))
@@ -2129,8 +2234,8 @@ async function viewVote() {
       </div>` : ""}
     ${missingIngredientsAlertHTML(tally)}
 
-    ${parent ? `<button id="voteFinalizeToggle" class="ghost overview-toggle">
-      ${S.voteFinalizeOpen ? "▾ Hide finalise-the-week panel" : `▸ Finalise the meals for ${weekWords(voteWeekId)}`}
+    ${parent && S.votingOpen ? `<button id="voteFinalizeToggle" class="${S.voteFinalizeOpen ? "ghost finalize-toggle open" : "plan-done-btn finalize-toggle"}">
+      ${S.voteFinalizeOpen ? "✕ Close" : `✅ Finalise ${weekWords(voteWeekId)}'s meals →`}
     </button>` : ""}
     ${parent && S.voteFinalizeOpen ? renderFinalizePanel(tally, target) : ""}
 
@@ -2172,13 +2277,13 @@ async function viewVote() {
             <span class="vote-check" aria-hidden="true"></span>
             ${S.meals?.find((x) => x.id === m.id)?.has_photo ? `<img class="vote-photo" loading="lazy" alt="" src="/api/meal-photo?id=${m.id}&v=${S.photoV || 0}">` : ""}
             <span class="vote-body">
-              <span class="vote-name">${esc(m.name)} ${m.v.total || vetoedByAnyone ? `<span class="vote-meta vote-meta-inline">· ${standing}</span>` : ""}</span>
-              <span class="vote-tags">${m.draft ? `<span class="tag">new</span>` : ""}${m.v.chosen ? `<span class="tag tag-chosen">on shortlist</span>` : ""}${(m.tags || "").split(",").filter(Boolean)
-                .map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</span>
+              <span class="vote-name">${esc(m.name)}${tagEmojis(m)}</span>
+              ${vetoedByAnyone ? `<span class="vote-who vetoed-note">🚫 Vetoed</span>` : m.v.total ? `<span class="vote-who">${voterChips(m.v.voters)}</span>` : ""}
+
             </span>
           </button>
           ${isMyVeto || (!my_veto && !m.v.total) ? `<button class="veto-btn ${isMyVeto ? "on" : ""}" data-veto="${m.id}"
-            title="${isMyVeto ? "Undo your veto" : "Veto — you get one"}">${isMyVeto ? "↺ undo" : "veto"}</button>` : ""}
+            title="${isMyVeto ? "Undo your veto" : "Veto — you get one"}">${isMyVeto ? "↩️" : "🚫"}</button>` : ""}
           ${needsIngredients ? `<div class="vote-ing-warn">
               ${ingredientsWarningHTML(true)}
               ${parent ? `<button class="addIngBtn ghost" data-id="${m.id}">+ Add ingredients</button>` : ""}
@@ -2282,17 +2387,16 @@ function renderFinalizePanel(tally, target) {
     (b.parent_votes - a.parent_votes) || (b.total - a.total) || a.name.localeCompare(b.name));
   return `
     <div class="winner-box">
-      <h3>This week's results</h3>
-      <p class="hint">Tick which meals make the cut — ${target} needed this week, but that's a guide, not a hard rule.</p>
-      <label class="field" style="max-width:160px"><span>Meals needed this week</span>
+      <h3>Pick the meals</h3>
+      <p class="hint">Tick what makes the cut — about ${target} needed.</p>
+      <label class="field" style="max-width:160px"><span>Meals needed</span>
         <input id="mealsTargetInput" type="number" min="1" value="${target}"></label>
       <div class="overview-days"><div class="overview-day">
         ${ranked.filter((t) => t.total > 0 || t.chosen).map((t) => `
           <label class="overview-row ${t.chosen ? "applied" : ""}">
             <input type="checkbox" class="finalizeCb" data-id="${t.id}" ${t.chosen ? "checked" : ""}>
             <span class="ov-body">
-              <span class="ov-meta">${t.total} vote${t.total === 1 ? "" : "s"}${t.voters ? ` · ${esc(t.voters)}` : ""}</span>
-              <span class="ov-name">${esc(t.name)} ${ingredientsWarningHTML(mealNeedsIngredients(t.id))}</span>
+              <span class="ov-name">${esc(t.name)} <span class="vote-who">${voterChips(t.voters)}</span> ${ingredientsWarningHTML(mealNeedsIngredients(t.id))}</span>
             </span>
           </label>`).join("") || `<p class="empty">No votes yet.</p>`}
       </div></div>
@@ -2352,6 +2456,7 @@ async function viewSettings() {
 
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Settings</h1></header>
+    <button id="switchPersonBtn" class="notice small" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">${meBadge()} Signed in as <strong>${esc(me()?.name || "nobody")}</strong> <span style="margin-left:auto">Switch →</span></button>
     ${isInstalled() ? "" : `<button id="installSettings" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">📲 <strong>Add to home screen</strong> →</button>`}
     <a href="#/history" class="notice small" style="display:block;text-decoration:none;color:var(--text)">🕘 <strong>Past weeks</strong> →</a>
     <button id="extraLogBtn" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">🧾 <strong>Extras history</strong> — who added what →</button>
@@ -2360,9 +2465,18 @@ async function viewSettings() {
     
     <div class="card pad">
       ${p ? `
+      <div class="row"><span class="row-label">Text size<span class="when">on this device</span></span>
+        <div class="size-picker">${TEXT_SIZES.map(([l, v]) => {
+          let cur = 100; try { cur = +localStorage.getItem(textSizeKey()) || 100; } catch { /* ignore */ }
+          return `<button class="sizeBtn ${cur === v ? "on" : ""}" data-v="${v}" style="font-size:${v / 100}rem">${l === "M" ? "A" : l}</button>`;
+        }).join("")}</div></div>
+      <label class="row"><span class="row-label">Compact view<span class="when">less space between things, on this device</span></span>
+        <input type="checkbox" id="compactToggle" ${document.documentElement.classList.contains("compact") ? "checked" : ""}></label>
       <label class="row"><span class="row-label">Look<span class="when">how the app looks on your screen</span></span>
         <select id="themeSel">${[["classic", "Plain"], ["fun", "Fun colours"], ["notepad", "Notepad"]]
           .map(([v, l]) => `<option value="${v}" ${(p.theme || "classic") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <div class="row"><span class="row-label">My icon<span class="when">shows next to your votes</span></span>
+        <button id="myIconBtn" class="icon-current">${p.emoji ? esc(p.emoji) : `<span class="voter-chip" style="background:${p.color || "#888"}">${esc(p.name[0])}</span>`} change</button></div>
       <div class="row" style="align-items:flex-start">
         <span class="row-label">My colour<span class="when">picks the app's accent colour whenever you're the one signed in</span></span>
         <div class="color-swatches">
@@ -2388,8 +2502,12 @@ async function viewSettings() {
     <div class="card pad">
       ${S.people.filter((x) => !x.is_placeholder).map((x) => `
         <div class="person-row-full">
-          <div class="row person-row">
-            <span class="row-label">${esc(x.name)}${x.is_admin ? ` <span class="tag">admin</span>` : ""}${x.pin_default ? ` <span class="tag" style="color:var(--low)">default PIN</span>` : ""}</span>
+          <div class="row person-line">
+            <span class="person-icon">${x.emoji ? esc(x.emoji) : `<span class="voter-chip" style="background:${x.color || VOTER_FALLBACK[x.id % VOTER_FALLBACK.length]}">${esc(x.name[0])}</span>`}</span>
+            <span class="row-label">${esc(x.name)} <span class="hint" style="display:inline">${x.role === "parent" ? "Parent" : "Child"}${x.is_admin ? " · admin" : ""}</span>${x.pin_default ? ` <span class="tag" style="color:var(--low)">default PIN</span>` : ""}</span>
+            ${isParent() ? `<button class="personMenu ghost" data-id="${x.id}" aria-label="Options for ${esc(x.name)}">⋯</button>` : ""}
+          </div>
+          <div class="row person-row day-hidden">
             <select class="roleSel" data-id="${x.id}" ${isAdmin() ? "" : "disabled"}>
               <option value="parent" ${x.role === "parent" ? "selected" : ""}>Parent</option>
               <option value="child"  ${x.role === "child" ? "selected" : ""}>Child</option>
@@ -2401,10 +2519,7 @@ async function viewSettings() {
             ${isAdmin() ? `<button class="adminToggle" data-id="${x.id}" data-on="${x.is_admin ? 1 : 0}">${x.is_admin ? "Remove admin" : "Make admin"}</button>` : ""}
             ${isAdmin() ? `<button class="delPerson" data-id="${x.id}" aria-label="Remove ${esc(x.name)}">✕ Delete</button>` : ""}
           </div>
-          ${isAdmin() ? `<div class="color-swatches admin-color-swatches" data-id="${x.id}">
-            ${KID_COLORS.map((c) => `<button class="swatch adminSwatch ${x.color === c ? "on" : ""}" data-id="${x.id}" data-color="${c}" style="background:${c}"></button>`).join("")}
-            <button class="swatch swatch-clear adminSwatch ${!x.color ? "on" : ""}" data-id="${x.id}" data-color="">✕</button>
-          </div>` : ""}
+          ${isAdmin() ? `<span class="day-hidden"><button class="adminIcon" data-id="${x.id}"></button></span>` : ""}
         </div>`).join("")}
       ${isAdmin() ? `<div class="add-extra">
         <input id="newPerson" placeholder="Add someone">
@@ -2477,6 +2592,38 @@ async function viewSettings() {
 
   if (!p) return;
 
+  document.querySelectorAll(".personMenu").forEach((b) => (b.onclick = () => {
+    const x = S.people.find((p) => p.id === +b.dataset.id); if (!x) return;
+    const id = x.id, admin = isAdmin();
+    const click = (sel) => { closeModal(); document.querySelector(`${sel}[data-id="${id}"]`)?.click(); };
+    const acts = [
+      ["voteLinkBtn", "🔗 Share vote link"],
+      ["voteLinkRegen", "♻️ Make a new vote link"],
+      ["resetVotesBtn", "↺ Reset this week's votes"],
+      ["resetPinBtn", "🔑 Reset PIN"],
+      admin && ["adminIcon", `${x.emoji || "🙂"} Change icon`],
+      admin && ["role", x.role === "parent" ? "👶 Make a child" : "🧑 Make a parent"],
+      admin && ["adminToggle", x.is_admin ? "Remove admin" : "Make admin"],
+      admin && ["delPerson", "✕ Delete"],
+    ].filter(Boolean);
+    openModal(x.name, `<div class="action-sheet">
+      ${admin ? `<div class="color-swatches sheet-swatches">${KID_COLORS.map((c) =>
+        `<button class="swatch sheetSwatch ${x.color === c ? "on" : ""}" data-color="${c}" style="background:${c}" aria-label="Colour"></button>`).join("")}
+        <button class="swatch swatch-clear sheetSwatch ${!x.color ? "on" : ""}" data-color="">✕</button></div>` : ""}
+      ${acts.map(([k, l]) => `<button class="sheetBtn ${k === "delPerson" ? "danger-text" : ""}" data-k="${k}">${l}</button>`).join("")}</div>`);
+    document.querySelectorAll(".sheetSwatch").forEach((sw) => (sw.onclick = busy(sw, async () => {
+      const res = await api.post("/api/person", { id, admin_id: S.meId, color: sw.dataset.color || null });
+      if (res.error) return toast(res.error, "bad");
+      closeModal(); await boot(); viewSettings();
+    })));
+    document.querySelectorAll(".sheetBtn").forEach((s) => (s.onclick = () => {
+      if (s.dataset.k === "role") {
+        closeModal();
+        const sel = document.querySelector(`.roleSel[data-id="${id}"]`);
+        if (sel) { sel.value = x.role === "parent" ? "child" : "parent"; sel.dispatchEvent(new Event("change")); }
+      } else click(`.${s.dataset.k}`);
+    }));
+  }));
   document.querySelectorAll(".roleSel").forEach((sel) => (sel.onchange = busy(sel, async () => {
     const person = S.people.find((x) => x.id === +sel.dataset.id);
     const res = await api.post("/api/person", { id: person.id, name: person.name, role: sel.value, admin_id: S.meId });
@@ -2551,6 +2698,8 @@ async function viewSettings() {
     await boot(); viewSettings();
   });
 
+  const spb = document.getElementById("switchPersonBtn");
+  if (spb) spb.onclick = switchPerson;
   const installSettings = document.getElementById("installSettings");
   if (installSettings) installSettings.onclick = showInstall;
   const extraLogBtn = document.getElementById("extraLogBtn");
@@ -2562,11 +2711,23 @@ async function viewSettings() {
         ${isParent() ? `<td>${esc(l.person_name || "—")}</td>` : ""}<td>${esc(l.item)} <span class="hint" style="display:inline">${esc(l.action)}</span></td></tr>`).join("")}
     </table>` : `<p class="empty">Nothing yet.</p>`);
   });
+  const compactToggle = document.getElementById("compactToggle");
+  if (compactToggle) compactToggle.onchange = () => {
+    try { localStorage.setItem(`mealplan-compact-${S.meId || "anon"}`, compactToggle.checked ? "1" : "0"); } catch { /* ignore */ }
+    applyTextSize();
+  };
+  document.querySelectorAll(".sizeBtn").forEach((b) => (b.onclick = () => {
+    try { localStorage.setItem(textSizeKey(), b.dataset.v); } catch { /* ignore */ }
+    applyTextSize(); viewSettings();
+  }));
   const themeSel = document.getElementById("themeSel");
   if (themeSel) themeSel.onchange = busy(themeSel, async () => {
     await api.post("/api/person", { id: p.id, actor_id: S.meId, theme: themeSel.value });
     await boot(); applyTheme(); viewSettings();
   });
+  const myIconBtn = document.getElementById("myIconBtn");
+  if (myIconBtn) myIconBtn.onclick = () => pickIcon(p.id, false);
+  document.querySelectorAll(".adminIcon").forEach((b) => (b.onclick = () => pickIcon(+b.dataset.id, true)));
   document.querySelectorAll(".swatch:not(.adminSwatch)").forEach((sw) => (sw.onclick = busy(sw, async () => {
     await api.post("/api/person", { id: p.id, actor_id: S.meId, color: sw.dataset.color || null });
     await boot(); applyTheme(); viewSettings();
@@ -2692,9 +2853,11 @@ async function viewRewards() {
     <p class="subtitle">1 point for each healthy meal you vote for that makes the list.</p>
 
     <div class="reward-balance-card">
-      <div class="reward-balance-big">${myEarned}</div>
-      <div class="hint">healthy points earned by ${esc(me()?.name || "you")}, all time</div>
-      <div style="margin-top:8px"><strong>${myBalance}</strong> left to spend${myEarned - myBalance > 0 ? ` · ${myEarned - myBalance} redeemed` : ""}</div>
+      <div class="reward-balance-big">${myBalance}</div>
+      <div class="hint">points ${esc(me()?.name || "you")} can spend</div>
+      <div style="margin-top:8px">${myEarned} earned all time${myEarned - myBalance > 0 ? ` · ${myEarned - myBalance} spent` : ""}</div>
+      <button id="rewardSwitch" class="link-toggle" style="display:block;margin:8px auto 0">Not ${esc(me()?.name || "you")}? Switch</button>
+      ${me() ? `<button id="rewardIconBtn" class="icon-current" style="margin-top:10px">${me().emoji ? esc(me().emoji) + " my icon" : "🙂 pick my icon"}</button>` : ""}
     </div>
 
     <h2 class="sec-title">Redeem</h2>
@@ -2781,6 +2944,10 @@ async function viewRewards() {
     ` : ""}
     ` : ""}`;
 
+  const rsw = document.getElementById("rewardSwitch");
+  if (rsw) rsw.onclick = switchPerson;
+  const rib = document.getElementById("rewardIconBtn");
+  if (rib) rib.onclick = () => pickIcon(S.meId, false);
   document.querySelectorAll(".grantBtn").forEach((b) => (b.onclick = async () => {
     const bal = +b.dataset.bal;
     const [tw, nw] = await Promise.all([S.thisWeekId, S.nextWeekId].map((id) => api.get(`/api/week?id=${id}`).catch(() => null)));
@@ -2956,9 +3123,9 @@ setInterval(async () => {
     if (!busyTyping && !modalOpen && !document.querySelector("dialog[open], .confirm-dialog")) {
       liveV = v;
       if (typeof S !== "undefined" && S.meId && location.hash !== "") {
-        const y = window.scrollY;
+        const y = scroller().scrollTop;
         await route();
-        window.scrollTo(0, y);
+        scroller().scrollTo(0, y);
       }
       return;
     }
@@ -2987,6 +3154,7 @@ async function viewPricing() {
       <span class="week-range">${linked} of ${items.length} items priced</span>
       <div class="actions"><button id="priceRefresh" class="primary">↻ Refresh prices</button></div></header>
     <p class="subtitle">Aldi prices${lastChecked ? `, last checked ${esc(new Date(lastChecked.replace(" ", "T") + "Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}` : ""}. Link more than one product to get a price range.</p>
+    ${dupesHTML(items)}
     <div class="pricing-bar">
       <input id="priceQ" placeholder="Search items…" value="${esc(f.q)}">
       <select id="priceShow">${[["all", "All items"], ["unlinked", "Not priced yet"], ["linked", "Priced"]]
@@ -2995,7 +3163,7 @@ async function viewPricing() {
     <div class="card pricing-table-wrap"><table class="pricing-table">
       <tr><th>Item</th><th>Used in</th><th>Aldi products</th><th>Range</th><th></th></tr>
       ${shown.map((i) => `<tr>
-        <td class="pt-item">${esc(i.key)}</td>
+        <td class="pt-item"><button class="itemEdit link-btn" data-key="${esc(i.key)}" title="Quantities per meal, or merge">${esc(i.key)} ✏️</button></td>
         <td class="pt-meals">${esc(i.meals.join(", "))}</td>
         <td>${i.products.map((p) => `<span class="price-chip ${p.missing ? "missing" : ""}" title="${esc(p.category)}">
             ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
@@ -3028,6 +3196,15 @@ async function viewPricing() {
     viewPricing();
   });
   document.querySelectorAll(".linkBtn").forEach((b) => (b.onclick = () => priceLinker(b.dataset.key)));
+  document.querySelectorAll(".itemEdit").forEach((b) => (b.onclick = () => itemEditor(items.find((i) => i.key === b.dataset.key), items)));
+  document.querySelectorAll(".dupMerge").forEach((b) => (b.onclick = busy(b, async () => {
+    const r = await api.post("/api/pricing/merge", { actor_id: S.meId, from: b.dataset.from, to: b.dataset.to });
+    if (r.error) return toast(r.error, "bad");
+    toast(`Combined into "${b.dataset.to}".`, "good"); S.meals = []; viewPricing();
+  })));
+  document.querySelectorAll(".dupSkip").forEach((b) => (b.onclick = () => {
+    const skip = lsGet("mealplan-dup-skip") || []; skip.push(b.dataset.pair); lsSet("mealplan-dup-skip", skip); viewPricing();
+  }));
 }
 
 function priceLinker(key) {
@@ -3095,4 +3272,73 @@ function wireInstallBanner() {
   const b = document.getElementById("installBtn"), n = document.getElementById("installNo");
   if (b) b.onclick = showInstall;
   if (n) n.onclick = () => { try { localStorage.setItem("mealplan-install-dismissed", "1"); } catch { /* ignore */ } n.closest(".install-banner").remove(); };
+}
+
+/* ---- Prices: likely duplicates + per-item quantities/merge ---- */
+const UNITS = ["g", "ml", "unit", "pack", "tin", "jar", "bottle", "bag", "tub", "loaf"];
+function dupNorm(k) {
+  return k.toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean)
+    .map((w) => (w.length > 3 && w.endsWith("es") ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w));
+}
+// Words that don't change what you'd actually buy ("Chicken Breast Fillets" = "Chicken Breast").
+const FILLER = ["fillet", "fresh", "frozen", "british", "large", "small", "pack", "loose", "whole", "free", "range", "plain", "semi", "skimmed"];
+function findDupes(items) {
+  const skip = lsGet("mealplan-dup-skip") || [];
+  const out = [];
+  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+    const a = dupNorm(items[i].key), b = dupNorm(items[j].key);
+    const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+    const same = a.join(" ") === b.join(" ");
+    const extra = l.filter((w) => !s.includes(w));
+    const near = s.length && s.every((w) => l.includes(w)) && extra.length === 1 && FILLER.includes(extra[0]);
+    const pair = [items[i].key, items[j].key].sort().join("|");
+    if ((same || near) && !skip.includes(pair)) out.push([items[i], items[j], pair]);
+  }
+  return out;
+}
+function dupesHTML(items) {
+  const d = findDupes(items);
+  if (!d.length) return "";
+  const used = (i) => `${i.uses.length} meal${i.uses.length === 1 ? "" : "s"}${i.meals.includes("Extras") ? " + extras" : ""}`;
+  return `<div class="card pad dupes"><h3>🔁 Possible duplicates (${d.length})</h3>
+    <p class="hint">Combine them so the shopping list adds them up as one line.</p>
+    ${d.map(([x, y, pair]) => `<div class="dup-row">
+      <span class="dup-names"><strong>${esc(x.key)}</strong> <span class="hint" style="display:inline">${used(x)}</span> ⇄ <strong>${esc(y.key)}</strong> <span class="hint" style="display:inline">${used(y)}</span></span>
+      <span class="dup-acts">
+        <button class="dupMerge" data-from="${esc(y.key)}" data-to="${esc(x.key)}">Keep “${esc(x.key)}”</button>
+        <button class="dupMerge" data-from="${esc(x.key)}" data-to="${esc(y.key)}">Keep “${esc(y.key)}”</button>
+        <button class="dupSkip ghost" data-pair="${esc(pair)}">Not the same</button>
+      </span></div>`).join("")}</div>`;
+}
+function itemEditor(item, items) {
+  if (!item) return;
+  openModal(item.key, `
+    ${item.uses.length ? `<h4>Amount per meal</h4>
+    <div class="use-list">${item.uses.map((u) => `<div class="use-row">
+      <span class="use-meal">${esc(u.meal)}</span>
+      <input class="useAmt" data-id="${u.id}" type="number" step="any" min="0" value="${u.amount}">
+      <select class="useUnit" data-id="${u.id}">${UNITS.map((x) => `<option ${x === u.unit ? "selected" : ""}>${x}</option>`).join("")}</select>
+      <button class="useSave" data-id="${u.id}">Save</button></div>`).join("")}</div>` : `<p class="hint">Only used as an extra.</p>`}
+    <h4>Combine with another item</h4>
+    <div class="pricing-bar"><select id="mergeInto"><option value="">— choose the name to keep —</option>
+      ${items.filter((i) => i.key !== item.key).map((i) => `<option>${esc(i.key)}</option>`).join("")}</select>
+      <button id="mergeGo" class="primary">Combine</button></div>
+    <p class="hint">“${esc(item.key)}” is renamed to the chosen item in every meal and extra, and its Aldi links move across.</p>`);
+  document.querySelectorAll(".useSave").forEach((b) => (b.onclick = busy(b, async () => {
+    const id = b.dataset.id;
+    const r = await api.post("/api/pricing/ingredient", { actor_id: S.meId, id: +id,
+      amount: +document.querySelector(`.useAmt[data-id="${id}"]`).value,
+      unit: document.querySelector(`.useUnit[data-id="${id}"]`).value });
+    if (r.error) return toast(r.error, "bad");
+    b.textContent = "Saved ✓"; S.meals = [];
+  })));
+  const go = document.getElementById("mergeGo");
+  go.onclick = busy(go, async () => {
+    const to = document.getElementById("mergeInto").value;
+    if (!to) return toast("Pick which name to keep.", "bad");
+    if (!(await confirmDialog(`Rename every “${item.key}” to “${to}”? This can't be undone automatically.`, { title: "Combine items?", okLabel: "Combine" }))) return;
+    const r = await api.post("/api/pricing/merge", { actor_id: S.meId, from: item.key, to });
+    if (r.error) return toast(r.error, "bad");
+    closeModal(); toast(`Combined into “${to}”.`, "good"); S.meals = []; viewPricing();
+  });
 }
