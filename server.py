@@ -10,6 +10,9 @@ import re
 import sqlite3
 import urllib.parse
 import urllib.request
+
+import auth
+import push
 from datetime import date, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -260,7 +263,20 @@ def migrate(conn):
         person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
         dow       INTEGER NOT NULL,
         meal_id   INTEGER NOT NULL REFERENCES meal(id) ON DELETE CASCADE,
-        PRIMARY KEY (week_id, person_id))""")
+        PRIMARY KEY (week_id, person_id, meal_id))""")
+    # Older databases allowed exactly one veto per person per week (key on
+    # week+person). Rebuild once so the allowance can be a setting.
+    pk = {r["name"]: r["pk"] for r in rows(conn.execute("PRAGMA table_info(veto)"))}
+    if not pk.get("meal_id"):
+        conn.execute("""CREATE TABLE veto_new (
+            week_id   INTEGER NOT NULL REFERENCES week(id) ON DELETE CASCADE,
+            person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+            dow       INTEGER NOT NULL,
+            meal_id   INTEGER NOT NULL REFERENCES meal(id) ON DELETE CASCADE,
+            PRIMARY KEY (week_id, person_id, meal_id))""")
+        conn.execute("INSERT INTO veto_new SELECT week_id, person_id, dow, meal_id FROM veto")
+        conn.execute("DROP TABLE veto")
+        conn.execute("ALTER TABLE veto_new RENAME TO veto")
 
     # The per-day/slot vote grid turned out to be too fiddly for real use —
     # people ended up "voting" for several different meals in the same slot
@@ -364,23 +380,6 @@ def migrate(conn):
         conn.execute("UPDATE person SET theme='fun' WHERE role!='parent'")
         conn.execute("INSERT OR IGNORE INTO config(key,value) VALUES ('theme_defaults_applied','1')")
 
-    # Everyone starts on the same generic PIN, marked as a default so the
-    # login prompt keeps nagging until it's actually changed — only set if
-    # they don't already have a real PIN, and only once ever per household.
-    DEFAULT_PIN = "0000"
-    if not conn.execute("SELECT 1 FROM config WHERE key='default_pins_applied'").fetchone():
-        for row in conn.execute("SELECT id, pin_hash FROM person").fetchall():
-            if not row["pin_hash"]:
-                conn.execute("UPDATE person SET pin_hash=?, pin_default=1 WHERE id=?",
-                             (hash_pin(DEFAULT_PIN), row["id"]))
-        conn.execute("INSERT OR IGNORE INTO config(key,value) VALUES ('default_pins_applied','1')")
-
-    # Every person needs a link_token to have a shareable vote link at all —
-    # backfilled here rather than only on first use, so it's ready the moment
-    # a parent opens Settings, and idempotent (never touches one that exists).
-    for row in rows(conn.execute("SELECT id FROM person WHERE link_token IS NULL")):
-        conn.execute("UPDATE person SET link_token=? WHERE id=?", (os.urandom(16).hex(), row["id"]))
-
     # Anonymous per-meal rating — separate from the weekly poll on purpose.
     # The poll's vote tally deliberately shows who voted for what; this is
     # the opposite: a lasting "is this generally a hit" signal that nobody
@@ -419,6 +418,8 @@ def init_db():
         conn.executescript(open(os.path.join(HERE, "schema.sql")).read())
         migrate(conn)
         migrate_adults_only(conn)
+        push.migrate(conn)
+        auth.migrate(conn)
         conn.commit()
 
 
@@ -512,19 +513,6 @@ DATA_VERSION = 0
 BUILD_ID = str(int(__import__("time").time()))
 
 
-def hash_pin(pin, salt=None):
-    salt = salt or os.urandom(8).hex()
-    h = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), 100_000).hex()
-    return f"{salt}${h}"
-
-
-def check_pin(pin, stored):
-    if not stored or "$" not in stored:
-        return False
-    salt, _ = stored.split("$", 1)
-    return hash_pin(pin, salt) == stored
-
-
 def ensure_week(conn, start_date):
     row = conn.execute("SELECT id FROM week WHERE start_date=?", (start_date,)).fetchone()
     if row:
@@ -607,6 +595,11 @@ def aldi_trim(p):
     return {"sku": p.get("sku"), "name": p.get("name") or "", "brand": p.get("brandName") or "",
             "size": p.get("sellingSize") or "", "price": ((p.get("price") or {}).get("amount") or 0) / 100,
             "category": " › ".join(cats[:2])}
+
+
+def vetoes_allowed(conn):
+    r = conn.execute("SELECT value FROM config WHERE key='vetoes_per_person'").fetchone()
+    return int(r["value"]) if r else 1
 
 
 def morrisons_enabled(conn):
@@ -781,6 +774,93 @@ def add_estimate(conn, groups):
             if not i.get("pantryChecked"):
                 low += min(costs); high += max(costs)
     return {"low": round(low, 2), "high": round(high, 2), "unpriced": unpriced}
+
+
+# ---------------------------------------------------------------- receipts
+RECEIPT_ITEM = re.compile(r"^\s*(\d{4,8})\s+(.+?)\s+(-?\d+\.\d{2})\s*([AB])?\s*$")
+RECEIPT_QTY = re.compile(r"^\s*(\d+)\s*[xX]\s+(\d+\.\d{2})\s*$")
+RECEIPT_DISC = re.compile(r"(-\d+\.\d{2})\s*[AB]?\s*$")
+
+
+def parse_receipt(text):
+    """Aldi UK receipt text (e.g. pasted from iPhone Live Text) -> lines + totals."""
+    lines, pending_qty, total, count = [], None, None, None
+    for raw in (text or "").splitlines():
+        t = raw.strip()
+        if not t:
+            continue
+        flat = re.sub(r"\s+", "", t).lower()
+        if flat.startswith("total"):
+            m = re.search(r"(\d+\.\d{2})", t)
+            if m and total is None:
+                total = float(m.group(1))
+            continue
+        m = re.match(r"^(\d+)\s+items?\b", t, re.I)
+        if m:
+            count = int(m.group(1)); continue
+        m = RECEIPT_QTY.match(t)
+        if m:
+            pending_qty = int(m.group(1)); continue
+        m = RECEIPT_ITEM.match(t)
+        if m:
+            code, name, amt = m.group(1), m.group(2).strip(), float(m.group(3))
+            if code.startswith("8000") or "DEPOSIT" in name.upper():
+                lines.append({"code": code, "text": name, "qty": 1, "amount": amt, "deposit": True})
+            else:
+                lines.append({"code": code, "text": name, "qty": pending_qty or 1, "amount": amt})
+            pending_qty = None
+            continue
+        m = RECEIPT_DISC.search(t)
+        if m and lines:  # "30.0%  -0.30 A" reduces the line above
+            lines[-1]["amount"] = round(lines[-1]["amount"] + float(m.group(1)), 2)
+            lines[-1]["discount"] = True
+    # identical consecutive lines are the same product bought twice: merge
+    merged = []
+    for ln in lines:
+        if merged and merged[-1]["code"] == ln["code"] and not ln.get("deposit") and not merged[-1].get("discount"):
+            merged[-1]["qty"] += ln["qty"]; merged[-1]["amount"] = round(merged[-1]["amount"] + ln["amount"], 2)
+        else:
+            merged.append(dict(ln))
+    return merged, total, count
+
+
+def receipt_tables(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS receipt (id INTEGER PRIMARY KEY, week_id INTEGER, total REAL,
+                    created_at TEXT DEFAULT (datetime('now')))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS receipt_line (receipt_id INTEGER, code TEXT, text TEXT, qty INTEGER,
+                    amount REAL, item_key TEXT, kind TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS receipt_code (code TEXT PRIMARY KEY, item_key TEXT, kind TEXT, name TEXT)""")
+
+
+def classify_receipt(conn, week_id, lines):
+    receipt_tables(conn)
+    code_to_item = {}
+    for r in rows(conn.execute("SELECT item_key, sku FROM price_product WHERE COALESCE(store,'aldi')='aldi'")):
+        core = r["sku"].lstrip("0")
+        code_to_item.setdefault(core, r["item_key"])
+        if len(core) > 6:
+            code_to_item.setdefault(core[:6], r["item_key"])  # variant codes: 387996004 -> 387996
+    learned = {r["code"]: r for r in rows(conn.execute("SELECT * FROM receipt_code"))}
+    groups = build_shopping(conn, week_id)
+    on_list = {i["key"]: i for g in groups for i in g["items"]}
+    meal_keys = {item_key(r["item"]) for r in rows(conn.execute(
+        """SELECT mi.item FROM week_day wd JOIN meal_ingredient mi ON mi.meal_id IN (wd.meal_id, wd.lunch_meal_id)
+           WHERE wd.week_id=?""", (week_id,)))}
+    for ln in lines:
+        if ln.get("deposit"):
+            ln["kind"] = "extra"; ln["name"] = "Bottle deposit"; continue
+        key = code_to_item.get(ln["code"].lstrip("0")) or (learned.get(ln["code"]) or {}).get("item_key")
+        ln["item_key"] = key
+        ln["name"] = key or (learned.get(ln["code"]) or {}).get("name") or ln["text"].title()
+        if key and key in meal_keys:
+            ln["kind"] = "meal"
+        elif key and key in on_list:
+            ln["kind"] = "extra"
+        elif ln["code"] in learned and learned[ln["code"]]["kind"]:
+            ln["kind"] = learned[ln["code"]]["kind"]; ln["remembered"] = True
+        else:
+            ln["kind"] = "treat"; ln["undecided"] = True
+    return lines
 
 
 def log_extra(conn, person_id, item, week_id, action):
@@ -974,6 +1054,18 @@ def build_week(conn, week_id, viewer_id=None):
 
 # ---------------------------------------------------------------- http
 
+def notify_extra_ask(conn, person_id, item):
+    """Tell the parents when a child asks for something (parents' own adds are silent)."""
+    who = conn.execute("SELECT name, role FROM person WHERE id=?", (person_id,)).fetchone()
+    if who and who["role"] != "parent":
+        push.notify(conn, db, push.people(conn, role="parent"), "extra_request",
+                    f"{who['name']} asked for {item}", "Tap to approve or say no.", "/#/extras")
+
+
+# Never sent to the browser or put in an export.
+SECRET_PERSON_FIELDS = ("pw_hash", "failed_logins", "locked_until", "pin_hash", "pin_default", "link_token")
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.join(HERE, "static"), **kw)
@@ -1006,6 +1098,12 @@ class Handler(SimpleHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if not u.path.startswith("/api/"):
             return super().do_GET()
+        with db() as conn:
+            me = self.signed_in(conn)
+            setup = not me and not conn.execute("SELECT 1 FROM person WHERE is_placeholder=0").fetchone()
+        if not me:
+            return self.send_json({"error": "signin", "setup": setup}, 401)
+        self.me = me
         if u.path == "/api/meal-photo":
             with db() as conn:
                 r = conn.execute("SELECT mime, data FROM meal_photo WHERE meal_id=?",
@@ -1023,6 +1121,15 @@ class Handler(SimpleHTTPRequestHandler):
                     "SELECT COUNT(*) c FROM extra_request WHERE status='pending'").fetchone()["c"]
             return self.send_json({"v": DATA_VERSION, "pending": pending, "build": BUILD_ID})
         q = urllib.parse.parse_qs(u.query)
+        # Who you are comes from your sign-in, never from the request. Children
+        # can only ever look as themselves; parents may look at anyone.
+        for k in ("admin_id", "actor_id"):
+            if k in q:
+                q[k] = [str(me["id"])]
+        if "person" in q and me["role"] != "parent":
+            q["person"] = [str(me["id"])]
+        if u.path.startswith("/api/push/"):
+            q["person_id"] = [str(me["id"])]
         try:
             with db() as conn:
                 return self.api_get(conn, u.path, q)
@@ -1036,12 +1143,32 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
+        # JSON only: a plain cross-site form can't send this content type, so
+        # another website can't make a signed-in browser post here (CSRF).
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            return self.send_json({"error": "Expected JSON."}, 415)
         try:
             body = self.read_json()
         except Exception:
             return self.send_json({"error": "That request wasn't valid JSON."}, 400)
         try:
             with db() as conn:
+                if u.path in ("/api/login", "/api/setup"):
+                    return self.auth_post(conn, u.path, body)
+                me = self.signed_in(conn)
+                if not me:
+                    return self.send_json({"error": "signin"}, 401)
+                self.me = me
+                if u.path in ("/api/logout", "/api/password"):
+                    return self.auth_post(conn, u.path, body)
+                if me["pw_must_change"]:
+                    return self.send_json({"error": "Choose a new password first."}, 403)
+                # Identity comes from the sign-in, not the request body.
+                for k in ("admin_id", "actor_id", "resolver_id", "by"):
+                    if k in body:
+                        body[k] = me["id"]
+                if "person_id" in body and (me["role"] != "parent" or u.path.startswith("/api/push/")):
+                    body["person_id"] = me["id"]
                 global DATA_VERSION
                 DATA_VERSION += 1
                 return self.api_post(conn, u.path, body)
@@ -1049,6 +1176,80 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": "That request was missing something or malformed."}, 400)
         except Exception as e:
             return self.send_json({"error": str(e)}, 500)
+
+    def client_ip(self):
+        # Behind a reverse proxy on the same machine, the proxy's header holds
+        # the real address. Never trusted from anyone else.
+        ip = self.client_address[0]
+        if ip in ("127.0.0.1", "::1"):
+            fwd = self.headers.get("X-Real-IP") or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            ip = fwd.strip() or ip
+        return ip
+
+    def signed_in(self, conn):
+        from http.cookies import SimpleCookie
+        try:
+            c = SimpleCookie(self.headers.get("Cookie") or "")
+        except Exception:
+            return None
+        return auth.session_person(conn, c[auth.COOKIE].value if auth.COOKIE in c else None)
+
+    def send_json_cookie(self, obj, cookie, status=200):
+        body = json.dumps(obj, default=str).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Set-Cookie", cookie)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def auth_post(self, conn, path, b):
+        if path == "/api/login":
+            ip = self.client_ip()
+            if not auth.ip_allowed(ip):
+                return self.send_json({"error": "Too many attempts. Wait a few minutes."}, 429)
+            row, err = auth.login(conn, b.get("username"), b.get("password"))
+            if err:
+                print(f"failed sign-in for {auth.clean_username(b.get('username'))!r} from {ip}", flush=True)
+                return self.send_json({"error": err}, 401)
+            token = auth.new_session(conn, row["id"])
+            return self.send_json_cookie({"ok": True}, auth.cookie_header(token))
+
+        if path == "/api/setup":
+            # First run only: nobody exists yet, so the first person becomes
+            # the admin parent. Refused for good once anyone real exists.
+            if conn.execute("SELECT 1 FROM person WHERE is_placeholder=0").fetchone():
+                return self.send_json({"error": "Already set up."}, 403)
+            name = (b.get("name") or "").strip()[:30]
+            prob = auth.password_problem(b.get("password"))
+            if not name or prob:
+                return self.send_json({"error": prob or "Needs a name."}, 400)
+            cur = conn.execute("INSERT INTO person(name,role,is_admin,username) VALUES (?,?,1,?)",
+                               (name, "parent", auth.unique_username(conn, b.get("username") or name)))
+            auth.set_password(conn, cur.lastrowid, b["password"], False)
+            token = auth.new_session(conn, cur.lastrowid)
+            return self.send_json_cookie({"ok": True}, auth.cookie_header(token))
+
+        if path == "/api/logout":
+            from http.cookies import SimpleCookie
+            c = SimpleCookie(self.headers.get("Cookie") or "")
+            auth.end_session(conn, c[auth.COOKIE].value if auth.COOKIE in c else None)
+            return self.send_json_cookie({"ok": True}, auth.cookie_header("", 0))
+
+        if path == "/api/password":
+            # Changing your own: needs the current one, unless you're on a
+            # temporary password a parent just set (then you're already in).
+            me = self.me
+            if not me["pw_must_change"] and not auth.check_password(b.get("current") or "", me["pw_hash"] or ""):
+                return self.send_json({"error": "Your current password isn't right."}, 400)
+            prob = auth.password_problem(b.get("new"))
+            if prob:
+                return self.send_json({"error": prob}, 400)
+            from http.cookies import SimpleCookie
+            c = SimpleCookie(self.headers.get("Cookie") or "")
+            auth.set_password(conn, me["id"], b["new"], False, keep_token=c[auth.COOKIE].value)
+            return self.send_json({"ok": True})
 
     def api_get(self, conn, path, q):
         if path == "/api/bootstrap":
@@ -1114,13 +1315,9 @@ class Handler(SimpleHTTPRequestHandler):
             people = rows(conn.execute("SELECT * FROM person ORDER BY role DESC, id"))
             for p in people:
                 p["energy"] = tdee(p)
-                p["has_pin"] = bool(p.pop("pin_hash", None))
-                # The token IS the credential for the magic vote link — if
-                # this ever went out in the normal people list, anyone logged
-                # in as anyone could read it out of devtools and vote as
-                # someone else. It's only ever handed out via the dedicated,
-                # parent-gated /api/person/link endpoint below.
-                p.pop("link_token", None)
+                p["has_password"] = bool(p.get("pw_hash"))
+                for k in SECRET_PERSON_FIELDS:
+                    p.pop(k, None)
             aisles = [r["name"] for r in rows(conn.execute("SELECT name FROM aisle_order ORDER BY pos"))]
             return self.send_json({
                 "weeks": weeks, "people": people, "aisles": aisles or AISLE_ORDER, "tags": TAGS,
@@ -1129,10 +1326,8 @@ class Handler(SimpleHTTPRequestHandler):
                 # week in hand is finished with — anything added from then on
                 # is for the next shop, not this one.
                 "shopDone": shop_done(conn, this_id),
-                # A fresh clone: nothing but the placeholder "Family" person
-                # exists yet. The client shows the setup wizard instead of
-                # the normal login gate until this flips false.
-                "needsSetup": not any(not p["is_placeholder"] for p in people),
+                "meId": self.me["id"],
+                "mustChangePassword": bool(self.me["pw_must_change"]),
                 "votingOpen": voting_open(conn, vote_id),
                 "weekStartDow": get_week_start_dow(conn),
                 "protectedWeekIds": sorted(protected_week_ids(conn)),
@@ -1141,32 +1336,19 @@ class Handler(SimpleHTTPRequestHandler):
                 # Days already eaten are history: dimmed, and read-only unless
                 # the household deliberately turns editing back on.
                 "morrisonsEnabled": morrisons_enabled(conn),
+                "vetoesPerPerson": vetoes_allowed(conn),
                 "allowHistoricEdits": (conn.execute(
                     "SELECT value FROM config WHERE key='allow_historic_edits'").fetchone()
                     or {"value": "0"})["value"] == "1",
             })
 
-        if path == "/api/person/by-token":
-            # Deliberately no auth beyond the token itself — knowing it IS the
-            # credential, same trust level as this app's PINs. Never leaks
-            # which tokens are valid (a miss just looks identical to a typo).
-            token = q.get("t", [""])[0]
-            row = conn.execute("SELECT id, name FROM person WHERE link_token=?", (token,)).fetchone()
-            if not row:
-                return self.send_json({"error": "Not a valid link."}, 404)
-            return self.send_json({"id": row["id"], "name": row["name"]})
-
-        if path == "/api/person/link":
-            # A parent fetching another person's link to share it — not the
-            # person themselves needing it, so this is parent-gated rather
-            # than self-or-admin like the PIN endpoints are.
-            admin_id = q.get("admin_id", [""])[0]
-            if not is_parent(conn, int(admin_id) if admin_id else None):
-                return self.send_json({"error": "Only a parent can do that."}, 403)
-            row = conn.execute("SELECT link_token FROM person WHERE id=?", (int(q["id"][0]),)).fetchone()
-            if not row:
-                return self.send_json({"error": "No such person."}, 404)
-            return self.send_json({"token": row["link_token"]})
+        if path == "/api/push/state":
+            pid = int(q.get("person_id", ["0"])[0] or 0)
+            _, key = push.vapid_keys(conn)
+            return self.send_json({
+                "enabled": push.AVAILABLE, "key": key,
+                "kinds": push.KINDS,
+                "off": [r["kind"] for r in conn.execute("SELECT kind FROM push_off WHERE person_id=?", (pid,))]})
 
         if path == "/api/week":
             wid = int(q["id"][0])
@@ -1292,14 +1474,13 @@ class Handler(SimpleHTTPRequestHandler):
             for t in tally:
                 t["vetoed"] = t["id"] in vetoed
                 t["chosen"] = t["id"] in chosen
-            my_veto = None
+            my_veto, my_vetoes = None, []
             mine = set()
             me_q = q.get("person", [""])[0]
             if me_q:
-                r = conn.execute("SELECT meal_id FROM veto WHERE week_id=? AND person_id=?",
-                                 (wid, int(me_q))).fetchone()
-                if r:
-                    my_veto = r["meal_id"]
+                my_vetoes = [r["meal_id"] for r in rows(conn.execute(
+                    "SELECT meal_id FROM veto WHERE week_id=? AND person_id=?", (wid, int(me_q))))]
+                my_veto = my_vetoes[0] if my_vetoes else None
                 mine = {r["meal_id"] for r in rows(conn.execute(
                     "SELECT meal_id FROM meal_vote WHERE week_id=? AND person_id=?", (wid, int(me_q))))}
             for t in tally:
@@ -1308,7 +1489,8 @@ class Handler(SimpleHTTPRequestHandler):
             default_target = int((conn.execute(
                 "SELECT value FROM config WHERE key='meals_target_default'").fetchone() or {"value": "7"})["value"])
             target = (wk["meals_target"] if wk and wk["meals_target"] else default_target)
-            return self.send_json({"tally": tally, "my_veto": my_veto, "target": target})
+            return self.send_json({"tally": tally, "my_veto": my_veto, "my_vetoes": my_vetoes,
+                                   "vetoes_allowed": vetoes_allowed(conn), "target": target})
 
         if path == "/api/week/pool":
             # Meals finalized onto this week's shortlist but not yet assigned
@@ -1327,6 +1509,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"pool": pool, "kidsLunch": kids_lunch})
 
         if path == "/api/export":
+            if not self.me["is_admin"]:
+                return self.send_json({"error": "Admins only."}, 403)
             # Every table, discovered at runtime rather than a hand-kept list.
             # The old fixed list had silently fallen ~15 tables behind the
             # schema — it was missing the poll (meal_vote), the shortlist
@@ -1338,6 +1522,7 @@ class Handler(SimpleHTTPRequestHandler):
             tables = [r["name"] for r in rows(conn.execute(
                 """SELECT name FROM sqlite_master WHERE type='table'
                    AND name NOT LIKE 'sqlite_%' ORDER BY name"""))]
+            tables = [t for t in tables if t not in ("session", "push_sub")]
             for t in tables:
                 dump["_schema"][t] = conn.execute(
                     "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()["sql"]
@@ -1347,7 +1532,10 @@ class Handler(SimpleHTTPRequestHandler):
                 # is recoverable household data; a PIN is re-set in seconds.
                 if t == "person":
                     for r in data:
-                        r.pop("pin_hash", None)
+                        for k in SECRET_PERSON_FIELDS:
+                            r.pop(k, None)
+                if t == "config":
+                    data = [r for r in data if r["key"] != "vapid_private"]
                 dump[t] = data
             body = json.dumps(dump, indent=1, default=str).encode()
             self.send_response(200)
@@ -1521,6 +1709,16 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/week/shop-close":
             conn.execute("UPDATE week SET shop_closed=? WHERE id=?", (1 if b.get("closed") else 0, b["week_id"]))
             conn.commit()
+            # Locking the shop opens next week's vote. Announce it once per week
+            # (person_id 0 marks the announcement; re-locking doesn't resend).
+            wk = conn.execute("SELECT start_date, confirmed FROM week WHERE id=?", (b["week_id"],)).fetchone()
+            if b.get("closed") and wk and wk["confirmed"]:
+                nxt = ensure_week(conn, (date.fromisoformat(wk["start_date"]) + timedelta(days=7)).isoformat())
+                if conn.execute("""INSERT OR IGNORE INTO push_sent(kind,week_id,person_id)
+                                   VALUES ('voting_open',?,0)""", (nxt,)).rowcount:
+                    conn.commit()
+                    push.notify(conn, db, push.people(conn, exclude=b.get("actor_id")), "voting_open",
+                                "Voting is open 🗳️", "Pick the meals you'd like next week.", "/#/vote")
             return self.send_json({"ok": True})
 
         if path == "/api/shop-tick":
@@ -1699,15 +1897,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"id": mid, "existed": bool(existing)})
 
         if path == "/api/poll-veto":
-            existing = conn.execute("SELECT meal_id FROM veto WHERE week_id=? AND person_id=?",
-                                    (b["week_id"], b["person_id"])).fetchone()
-            if existing and existing["meal_id"] == b["meal_id"]:
-                conn.execute("DELETE FROM veto WHERE week_id=? AND person_id=?",
-                             (b["week_id"], b["person_id"]))
+            allowed = vetoes_allowed(conn)
+            mine = [r["meal_id"] for r in rows(conn.execute(
+                "SELECT meal_id FROM veto WHERE week_id=? AND person_id=?", (b["week_id"], b["person_id"])))]
+            if b["meal_id"] in mine:
+                conn.execute("DELETE FROM veto WHERE week_id=? AND person_id=? AND meal_id=?",
+                             (b["week_id"], b["person_id"], b["meal_id"]))
                 conn.commit()
                 return self.send_json({"ok": True, "vetoed": False})
-            if existing:
-                return self.send_json({"error": "Only one veto per week — undo your other one first."}, 400)
+            if allowed == 0:
+                return self.send_json({"error": "Vetoes are switched off."}, 400)
+            if len(mine) >= allowed:
+                return self.send_json({"error": f"That's all {allowed} of your vetoes — undo one first."}, 400)
             if conn.execute("SELECT 1 FROM meal_vote WHERE week_id=? AND meal_id=?",
                             (b["week_id"], b["meal_id"])).fetchone():
                 return self.send_json({"error": "Someone's already voted for this one, so it can't be vetoed."}, 400)
@@ -1762,6 +1963,11 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("UPDATE week SET meals_target=? WHERE id=?", (int(b["meals_target"]), wid))
             conn.execute("UPDATE week SET confirmed=1 WHERE id=?", (wid,))
             conn.commit()
+            names = [r["name"] for r in conn.execute(
+                f"SELECT name FROM meal WHERE id IN ({','.join('?' * len(meal_ids))})", meal_ids)]
+            push.notify(conn, db, push.people(conn, exclude=b.get("actor_id")), "plan_final",
+                        "The meals are set 🍽️", ", ".join(names[:6]) + (" and more" if len(names) > 6 else ""),
+                        "/#/plan")
             return self.send_json({"ok": True})
 
         if path == "/api/week/swap-days":
@@ -1904,6 +2110,7 @@ class Handler(SimpleHTTPRequestHandler):
                           b.get("unit") or "unit", b.get("aisle") or "Household", b["week_id"]))
             log_extra(conn, b["person_id"], item, b["week_id"], "asked for")
             conn.commit()
+            notify_extra_ask(conn, b["person_id"], item)
             return self.send_json({"ok": True})
 
         if path == "/api/extra-request/resolve":
@@ -2065,6 +2272,55 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"rows": out})
 
+        if path == "/api/receipt/parse":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Parents only."}, 403)
+            lines, total, count = parse_receipt(b.get("text", ""))
+            if not lines:
+                return self.send_json({"error": "Couldn't find any item lines. Paste the text straight from the receipt."}, 400)
+            lines = classify_receipt(conn, b["week_id"], lines)
+            s_ = round(sum(l["amount"] for l in lines), 2)
+            n_ = sum(l["qty"] for l in lines if not l.get("deposit"))
+            return self.send_json({"lines": lines, "total": total, "count": count, "sum": s_, "items": n_})
+
+        if path == "/api/receipt/save":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Parents only."}, 403)
+            receipt_tables(conn)
+            wid, lines = b["week_id"], b["lines"]
+            total = float(b.get("total") or sum(l["amount"] for l in lines))
+            conn.execute("DELETE FROM receipt_line WHERE receipt_id IN (SELECT id FROM receipt WHERE week_id=?)", (wid,))
+            conn.execute("DELETE FROM receipt WHERE week_id=?", (wid,))
+            rid = conn.execute("INSERT INTO receipt(week_id,total) VALUES (?,?)", (wid, total)).lastrowid
+            for l in lines:
+                conn.execute("INSERT INTO receipt_line VALUES (?,?,?,?,?,?,?)",
+                             (rid, l["code"], l["text"], l["qty"], l["amount"], l.get("item_key"), l["kind"]))
+                if l.get("decided"):  # remember the choice for this product next time
+                    conn.execute("""INSERT INTO receipt_code(code,item_key,kind,name) VALUES (?,?,?,?)
+                                    ON CONFLICT(code) DO UPDATE SET kind=excluded.kind,
+                                    item_key=COALESCE(excluded.item_key, receipt_code.item_key), name=excluded.name""",
+                                 (l["code"], l.get("item_key"), l["kind"] if l["kind"] != "regular" else "extra", l.get("name")))
+                if l["kind"] == "regular" and l.get("decided"):
+                    nm = l.get("name") or l["text"].title()
+                    ex = conn.execute("SELECT id FROM extra WHERE item=? COLLATE NOCASE", (nm,)).fetchone()
+                    if ex:
+                        conn.execute("UPDATE extra SET recurring=1 WHERE id=?", (ex["id"],))
+                    else:
+                        conn.execute("INSERT INTO extra(item,aisle,recurring,amount,unit) VALUES (?,?,1,1,'unit')",
+                                     (nm, "Cupboard"))
+            conn.execute("UPDATE week SET shop_total=? WHERE id=?", (round(total, 2), wid))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/receipt/summary":
+            receipt_tables(conn)
+            r = conn.execute("SELECT id, total FROM receipt WHERE week_id=?", (b["week_id"],)).fetchone()
+            if not r:
+                return self.send_json({"summary": None})
+            by = {k["kind"]: k["s"] for k in rows(conn.execute(
+                "SELECT kind, ROUND(SUM(amount),2) s FROM receipt_line WHERE receipt_id=? GROUP BY kind", (r["id"],)))}
+            return self.send_json({"summary": {"total": r["total"], "by": by}})
+
         if path == "/api/compare/pick":
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Parents only."}, 403)
@@ -2190,6 +2446,8 @@ class Handler(SimpleHTTPRequestHandler):
                              (b["person_id"], ex["item"], qty, ex["unit"], ex["aisle"], b["week_id"]))
             log_extra(conn, b["person_id"], ex["item"], b["week_id"], f"asked for {qty}" if qty else "cancelled ask")
             conn.commit()
+            if qty and not pend:  # a new ask, not +/- on one that's already waiting
+                notify_extra_ask(conn, b["person_id"], ex["item"])
             return self.send_json({"ok": True, "qty": qty})
 
         if path == "/api/extra/set-qty":
@@ -2281,20 +2539,48 @@ class Handler(SimpleHTTPRequestHandler):
                 # there's someone who can add everyone else normally from
                 # then on. Guarded on the actual DB state, not a client flag,
                 # so it can't be replayed once a real person already exists.
-                first_ever = conn.execute(
-                    "SELECT COUNT(*) c FROM person WHERE is_placeholder=0").fetchone()["c"] == 0
-                if not admin and not first_ever:
+                if not admin:
                     return self.send_json({"error": "Only the household admin can add people."}, 403)
-                role = "parent" if first_ever else b.get("role", "child")
-                cur = conn.execute("INSERT INTO person(name,role,is_admin) VALUES (?,?,?)",
-                                   (b["name"], role, 1 if first_ever else 0))
+                cur = conn.execute("INSERT INTO person(name,role,is_admin,username) VALUES (?,?,0,?)",
+                                   (b["name"], b.get("role", "child"), auth.unique_username(conn, b["name"])))
                 pid = cur.lastrowid
             conn.commit()
             p = conn.execute("SELECT * FROM person WHERE id=?", (pid,)).fetchone()
             pd = dict(p)
-            pd["has_pin"] = bool(pd.pop("pin_hash", None))
-            pd.pop("link_token", None)
+            pd["has_password"] = bool(pd.get("pw_hash"))
+            for k in SECRET_PERSON_FIELDS:
+                pd.pop(k, None)
             return self.send_json({"person": pd, "energy": tdee(p)})
+
+        if path == "/api/push/subscribe":
+            sub = b.get("sub") or {}
+            keys = sub.get("keys") or {}
+            if not (sub.get("endpoint") and keys.get("p256dh") and keys.get("auth")):
+                return self.send_json({"error": "Bad subscription."}, 400)
+            conn.execute("""INSERT INTO push_sub(endpoint,person_id,p256dh,auth) VALUES (?,?,?,?)
+                            ON CONFLICT(endpoint) DO UPDATE SET person_id=excluded.person_id,
+                            p256dh=excluded.p256dh, auth=excluded.auth""",
+                         (sub["endpoint"], b["person_id"], keys["p256dh"], keys["auth"]))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/push/unsubscribe":
+            conn.execute("DELETE FROM push_sub WHERE endpoint=?", (b.get("endpoint"),))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/push/prefs":
+            conn.execute("DELETE FROM push_off WHERE person_id=?", (b["person_id"],))
+            for k in b.get("off", []):
+                if k in push.KINDS:
+                    conn.execute("INSERT INTO push_off(person_id,kind) VALUES (?,?)", (b["person_id"], k))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/push/test":
+            n = push.notify(conn, db, [b["person_id"]], "test", "It works 🎉",
+                            "Notifications are on for this device.", "/#/settings")
+            return self.send_json({"ok": True, "devices": n})
 
         if path == "/api/config":
             # Household-wide variables — admin only. Client-asserted admin_id
@@ -2312,6 +2598,10 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('meals_target_default',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              (str(int(b["meals_target_default"])),))
+            if "vetoes_per_person" in b:
+                conn.execute("""INSERT INTO config(key,value) VALUES ('vetoes_per_person',?)
+                                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                             (str(max(0, min(10, int(b["vetoes_per_person"])))),))
             if "morrisons_enabled" in b:
                 conn.execute("""INSERT INTO config(key,value) VALUES ('morrisons_enabled',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
@@ -2409,19 +2699,6 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
-        if path == "/api/person/set-pin":
-            # Anyone can set their own PIN; an admin can reset anyone's
-            # (for a kid who forgets theirs) by supplying admin_id instead.
-            target = b["id"]
-            if target != b.get("by") and not is_admin(conn, b.get("admin_id")):
-                return self.send_json({"error": "Can't set someone else's PIN."}, 403)
-            pin = re.sub(r"\D", "", str(b.get("pin", "")))
-            if len(pin) != 4:
-                return self.send_json({"error": "PIN must be 4 digits."}, 400)
-            conn.execute("UPDATE person SET pin_hash=?, pin_default=0 WHERE id=?", (hash_pin(pin), target))
-            conn.commit()
-            return self.send_json({"ok": True})
-
         if path == "/api/meal-photo":
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Only a parent can change meal photos."}, 403)
@@ -2434,21 +2711,6 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "That isn't a photo."}, 400)
                 conn.execute("INSERT OR REPLACE INTO meal_photo(meal_id,mime,data) VALUES (?,?,?)",
                              (b["meal_id"], mime, base64.b64decode(data)))
-            conn.commit()
-            return self.send_json({"ok": True})
-
-        if path == "/api/person/reset-pin":
-            if not is_parent(conn, b.get("admin_id")):
-                return self.send_json({"error": "Only a parent can do that."}, 403)
-            conn.execute("UPDATE person SET pin_hash=?, pin_default=1 WHERE id=?",
-                         (hash_pin("0000"), b["id"]))
-            conn.commit()
-            return self.send_json({"ok": True})
-
-        if path == "/api/person/clear-pin":
-            if not is_admin(conn, b.get("admin_id")):
-                return self.send_json({"error": "Admins only."}, 403)
-            conn.execute("UPDATE person SET pin_hash=NULL WHERE id=?", (b["id"],))
             conn.commit()
             return self.send_json({"ok": True})
 
@@ -2468,20 +2730,31 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"ok": True})
 
-        if path == "/api/person/link/regenerate":
-            # Same bar as fetching one — a parent shared it once, might need
-            # to kill it and reissue (link went to the wrong chat, whatever).
-            if not is_parent(conn, b.get("admin_id")):
-                return self.send_json({"error": "Only a parent can do that."}, 403)
-            token = os.urandom(16).hex()
-            conn.execute("UPDATE person SET link_token=? WHERE id=?", (token, b["id"]))
-            conn.commit()
-            return self.send_json({"token": token})
+        if path == "/api/person/set-password":
+            # A temporary password they must change at next sign-in. Parents
+            # can do it for children, the admin for anyone.
+            target = conn.execute("SELECT * FROM person WHERE id=?", (b["id"],)).fetchone()
+            if not target:
+                return self.send_json({"error": "No such person."}, 404)
+            if not (self.me["is_admin"] or (self.me["role"] == "parent" and target["role"] != "parent")):
+                return self.send_json({"error": "You can't set that person's password."}, 403)
+            prob = auth.password_problem(b.get("password"))
+            if prob:
+                return self.send_json({"error": prob}, 400)
+            auth.set_password(conn, target["id"], b["password"], target["id"] != self.me["id"])
+            return self.send_json({"ok": True, "username": target["username"]})
 
-        if path == "/api/person/verify-pin":
-            row = conn.execute("SELECT pin_hash, pin_default FROM person WHERE id=?", (b["id"],)).fetchone()
-            ok = not row["pin_hash"] or check_pin(str(b.get("pin", "")), row["pin_hash"])
-            return self.send_json({"ok": ok, "pin_default": bool(row["pin_default"]) if ok else False})
+        if path == "/api/person/username":
+            if not self.me["is_admin"]:
+                return self.send_json({"error": "Admins only."}, 403)
+            u = auth.clean_username(b.get("username"))
+            if not u:
+                return self.send_json({"error": "Letters and numbers only."}, 400)
+            if conn.execute("SELECT 1 FROM person WHERE username=? AND id!=?", (u, b["id"])).fetchone():
+                return self.send_json({"error": "Someone already has that username."}, 400)
+            conn.execute("UPDATE person SET username=? WHERE id=?", (u, b["id"]))
+            conn.commit()
+            return self.send_json({"ok": True, "username": u})
 
         if path == "/api/person/delete":
             # This is the single most destructive call in the app: person rows
@@ -2512,7 +2785,36 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json({"error": "not found"}, 404)
 
 
+def cli_set_password(username):
+    """Recovery / first-time setup from the server's own shell:
+    python3 server.py set-password <username>"""
+    import getpass, secrets
+    with db() as conn:
+        row = conn.execute("SELECT id, name FROM person WHERE username=?",
+                           (auth.clean_username(username),)).fetchone()
+        if not row:
+            names = ", ".join(r["username"] for r in conn.execute(
+                "SELECT username FROM person WHERE username IS NOT NULL ORDER BY id"))
+            raise SystemExit(f"No user {username!r}. Usernames: {names}")
+        pw = getpass.getpass("New password (blank = generate a temporary one): ")
+        temporary = not pw
+        if temporary:
+            pw = secrets.token_urlsafe(9)
+            print(f"Temporary password for {row['name']}: {pw}  (they'll choose their own at sign-in)")
+        elif auth.password_problem(pw):
+            raise SystemExit(auth.password_problem(pw))
+        auth.set_password(conn, row["id"], pw, must_change=temporary)
+        print("Done. Existing sign-ins for that person have been ended.")
+
+
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == "set-password":
+        init_db()
+        cli_set_password(sys.argv[2])
+        raise SystemExit
     init_db()
-    print(f"meal planner on http://0.0.0.0:{PORT}  (db: {DB_PATH})")
+    push.reminder_loop(db)
+    print(f"meal planner on http://0.0.0.0:{PORT}  (db: {DB_PATH})"
+          + ("" if push.AVAILABLE else "  [push off: pip install cryptography to enable]"))
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

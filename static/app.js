@@ -9,7 +9,7 @@ const S = {
   weekId: null, weeks: [], people: [], aisles: [], tags: [], meals: [], week: null,
   // Who's using the app right now. No auth — this is a LAN app for one household,
   // and passwords for children are friction with no threat model behind them.
-  meId: +(localStorage.getItem("mealplan-me") || 0) || null,
+  meId: null, // set from the sign-in by /api/bootstrap
   mealFilter: { tag: "", q: "" },
 };
 
@@ -137,9 +137,11 @@ function applyTheme() {
   applyTextSize();
   const p = me();
   document.documentElement.dataset.funTheme = p?.theme === "fun" ? "1" : "0";
-  document.documentElement.dataset.notepad = p?.theme === "notepad" ? "1" : "0";
+  const pad = String(p?.theme || "").startsWith("notepad");
+  document.documentElement.dataset.notepad = pad ? "1" : "0";
+  document.documentElement.dataset.pad = pad ? (p.theme.split("-")[1] || "cream") : "";
   const root = document.documentElement.style;
-  if (p?.color && p?.theme !== "notepad") {
+  if (p?.color && !pad) {
     const [h] = hexToHsl(p.color);
     root.setProperty("--accent", p.color);
     root.setProperty("--bg", `hsl(${h.toFixed(0)}, 38%, 9%)`);
@@ -181,8 +183,84 @@ async function req(path, opts) {
   } catch {
     throw new Error(`${path} returned ${res.status}, not JSON:\n${text.slice(0, 300)}`);
   }
+  if (res.status === 401 && body.error === "signin") {
+    showSignIn(!!body.setup);
+    throw new Error("Signed out");
+  }
   if (!res.ok || body.error) throw new Error(body.error || `${path} → HTTP ${res.status}`);
   return body;
+}
+
+// Sign-in (or, on a brand-new install, create the first account). Plain
+// form fields so password managers fill and save them.
+function showSignIn(setup) {
+  if (document.getElementById("signinForm")) return;
+  S.pauseSync = true;
+  document.querySelector(".tabs").style.display = "none";
+  document.getElementById("voteFab")?.classList.add("hidden");
+  document.getElementById("view").innerHTML = `
+    <div class="login-gate">
+      <h1>${setup ? "Welcome" : "Sign in"}</h1>
+      <p class="subtitle">${setup ? "Create the first account. You'll be the admin and can add everyone else from Settings." : ""}</p>
+      <form id="signinForm" class="card pad" style="max-width:340px;margin:0 auto">
+        ${setup ? `<label class="field"><span>Your name</span><input id="siName" maxlength="30" autocomplete="name" required></label>` : ""}
+        <label class="field"><span>Username</span><input id="siUser" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" ${setup ? "" : "required"}></label>
+        <label class="field"><span>Password</span><input id="siPass" type="password" autocomplete="${setup ? "new-password" : "current-password"}" required></label>
+        <p id="siErr" class="pin-error"></p>
+        <button class="primary" style="width:100%">${setup ? "Create account" : "Sign in"}</button>
+      </form>
+    </div>`;
+  const f = document.getElementById("signinForm");
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("siErr");
+    const btn = f.querySelector("button");
+    btn.disabled = true;
+    err.textContent = ""; err.classList.remove("show");
+    try {
+      const res = await fetch(setup ? "/api/setup" : "/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(setup
+          ? { name: document.getElementById("siName").value, username: document.getElementById("siUser").value, password: document.getElementById("siPass").value }
+          : { username: document.getElementById("siUser").value, password: document.getElementById("siPass").value }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Couldn't sign in.");
+      location.reload();
+    } catch (ex) {
+      err.textContent = ex.message; err.classList.add("show");
+      document.getElementById("siPass").value = "";
+      btn.disabled = false;
+    }
+  };
+  (document.getElementById(setup ? "siName" : "siUser")).focus();
+}
+
+// Change your own password. `forced` = signed in with a temporary one.
+function changePasswordForm(forced) {
+  return `
+    <form id="pwForm" class="card pad" style="max-width:340px;${forced ? "margin:0 auto" : ""}">
+      <input type="text" autocomplete="username" value="${esc(me()?.username || "")}" hidden>
+      ${forced ? "" : `<label class="field"><span>Current password</span><input id="pwCur" type="password" autocomplete="current-password" required></label>`}
+      <label class="field"><span>New password</span><input id="pwNew" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label class="field"><span>New password again</span><input id="pwNew2" type="password" autocomplete="new-password" minlength="8" required></label>
+      <p class="hint">At least 8 characters. A short sentence is easiest to remember.</p>
+      <button class="primary" style="width:100%">Save password</button>
+    </form>`;
+}
+function wirePasswordForm(onDone) {
+  const f = document.getElementById("pwForm");
+  if (!f) return;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const nw = document.getElementById("pwNew").value;
+    if (nw !== document.getElementById("pwNew2").value) return toast("The two new passwords don't match.", "bad");
+    try {
+      await api.post("/api/password", { current: document.getElementById("pwCur")?.value || "", new: nw });
+      toast("Password saved.", "good");
+      onDone();
+    } catch (ex) { toast(ex.message, "bad"); }
+  };
 }
 
 const api = {
@@ -334,64 +412,8 @@ function textPrompt(title, opts = {}) {
   });
 }
 
-// A real numeric keypad, not a raw text field — used for every PIN entry in
-// the app (login, switch-person, set/change PIN) so it's one consistent,
-// touch-sized interaction instead of three different half-native ones.
-// `validate`, if given, is awaited once 4 digits are in; on failure it shows
-// the message inline and clears input rather than closing, so a wrong PIN is
-// a retry, not a dead end. Resolves {digits, extra} on success, null on cancel.
-function pinPad(opts = {}) {
-  const { title = "Enter PIN", validate = async () => ({ ok: true }) } = opts;
-  return new Promise((resolve) => {
-    let digits = "";
-    const body = document.getElementById("modalBody");
-    const render = (errorMsg, shake) => {
-      body.innerHTML = `
-        <p class="subtitle" style="margin:0 0 14px">${esc(title)}</p>
-        <div class="pin-dots ${shake ? "shake" : ""}">${[0, 1, 2, 3]
-          .map((i) => `<span class="pin-dot ${i < digits.length ? "filled" : ""}"></span>`).join("")}</div>
-        <p class="pin-error ${errorMsg ? "show" : ""}">${esc(errorMsg || "")}</p>
-        <div class="pin-keys">
-          ${["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"].map((k) => k === ""
-            ? `<span></span>`
-            : `<button type="button" class="pin-key" data-k="${k}">${k}</button>`).join("")}
-        </div>
-        <div class="modal-actions" style="justify-content:flex-end">
-          <button id="pinCancel" class="ghost">Cancel</button>
-        </div>`;
-      document.getElementById("pinCancel").onclick = () => finish(null);
-      body.querySelectorAll(".pin-key").forEach((b) => (b.onclick = () => onKey(b.dataset.k)));
-    };
-    const restore = withCloseGuard(() => finish(null));
-    const finish = (val) => { restore(); document.removeEventListener("keydown", onPhysicalKey); closeModal(); resolve(val); };
-    const onKey = async (k) => {
-      if (k === "⌫") { digits = digits.slice(0, -1); return render(); }
-      if (digits.length >= 4) return;
-      digits += k;
-      render();
-      if (digits.length === 4) {
-        const result = await validate(digits);
-        if (result.ok) return finish({ digits, extra: result.extra });
-        digits = "";
-        // CSS animations play once and stop on their own — no need to
-        // schedule anything to "undo" the shake. The message stays on
-        // screen until the next digit is pressed (onKey's own render()
-        // call then clears it), which is exactly when it should go.
-        render(result.message || "Wrong PIN — try again.", true);
-      }
-    };
-    const onPhysicalKey = (e) => {
-      if (/^[0-9]$/.test(e.key)) onKey(e.key);
-      else if (e.key === "Backspace") onKey("⌫");
-      else if (e.key === "Escape") finish(null);
-    };
-    openModal(title, "");
-    render();
-    document.addEventListener("keydown", onPhysicalKey);
-  });
-}
-
 function showError(e) {
+  if (document.getElementById("signinForm")) return; // signed out: the sign-in screen is showing
   document.getElementById("view").innerHTML = `
     <div class="error-box">
       <h2>Something went wrong</h2>
@@ -436,16 +458,6 @@ document.addEventListener("click", (e) => {
   S.weekId = b.dataset.to === "next" ? S.nextWeekId : S.thisWeekId;
   route();
 });
-// Pick who's using this phone (replaces the old top-bar name chooser).
-function switchPerson() {
-  openModal("Who's using the app?", `<div class="action-sheet">${S.people.filter((p) => !p.is_placeholder).map((p) =>
-    `<button class="sheetBtn switchTo" data-id="${p.id}">${p.emoji ? esc(p.emoji) : "🙂"} ${esc(p.name)}${p.id === S.meId ? " ✓" : ""}</button>`).join("")}</div>`);
-  document.querySelectorAll(".switchTo").forEach((b) => (b.onclick = async () => {
-    closeModal();
-    if (+b.dataset.id === S.meId) return;
-    if (await selectPerson(+b.dataset.id)) { await boot(); }
-  }));
-}
 const meBadge = () => me() ? `<span class="me-badge" title="Signed in as ${esc(me().name)}">${me().emoji ? esc(me().emoji) : esc(me().name[0])}</span>` : "";
 
 const weekBannerHTML = (startISO) =>
@@ -500,6 +512,7 @@ function pickIcon(personId, asAdmin) {
   });
   document.querySelectorAll(".iconPick").forEach((b) => (b.onclick = busy(b, () => save(b.dataset.e))));
 }
+const THEMES = [["classic", "Plain"], ["fun", "Fun colours"], ["notepad", "Notepad"], ["notepad-dark", "Notepad · dark"], ["notepad-mint", "Notepad · mint"], ["notepad-rose", "Notepad · rose"]];
 const TAG_EMOJI = { "Healthy": "🥦", "Kids' favourite": "⭐", "Quick": "⚡", "Low carb": "🥗", "Batch cook": "🍲", "Treat": "🍰" };
 const tagEmojis = (m) => {
   const bits = [];
@@ -568,55 +581,6 @@ const missingIngredientsAlertHTML = (tally) => {
 
 /* ---------------------------------------------------------------- boot */
 
-// Shared by the who-picker dropdown and the login gate below — checks the
-// PIN if the target has one, nags about a still-default PIN, and only sets
-// S.meId once that's all actually passed. Returns false on cancel/wrong PIN
-// so the caller can bail out without changing who's "logged in".
-async function selectPerson(targetId) {
-  const target = S.people.find((p) => p.id === targetId);
-  if (target?.has_pin) {
-    const result = await pinPad({
-      title: `Enter ${target.name}'s PIN`,
-      validate: async (digits) => {
-        try {
-          const { ok, pin_default } = await api.post("/api/person/verify-pin", { id: targetId, pin: digits });
-          return ok ? { ok: true, extra: { pin_default } } : { ok: false, message: "Wrong PIN — try again." };
-        } catch (err) {
-          return { ok: false, message: OFFLINE_MSG };
-        }
-      },
-    });
-    if (!result) return false; // cancelled
-    // Still on the day+month-of-birth default — nag every login until they
-    // actually pick their own, but never force it (they can just skip).
-    if (result.extra?.pin_default) {
-      const wantsChange = await confirmDialog(
-        `${target.name}, you're still using your starter PIN. Set your own now?`,
-        { okLabel: "Set a new PIN", cancelLabel: "Skip for now" });
-      if (wantsChange) {
-        const newPin = await pinPad({ title: "Choose a new 4-digit PIN" });
-        if (newPin) {
-          try {
-            const res = await api.post("/api/person/set-pin", { id: targetId, by: targetId, pin: newPin.digits });
-            if (res.error) toast(res.error, "bad");
-          } catch (err) { toast(OFFLINE_MSG, "bad"); }
-        } else {
-          toast("Skipped — you'll be asked again next time.");
-        }
-      }
-    }
-  }
-  S.meId = targetId;
-  localStorage.setItem("mealplan-me", S.meId);
-  // Ratings are per-viewer (my_rating comes back scoped to whoever asked) —
-  // a cached S.meals from before the switch would show the PREVIOUS person's
-  // ratings as if they were the new person's, on a shared device.
-  S.meals = [];
-  applyTheme();
-  await celebrateNewPoints(targetId);
-  return true;
-}
-
 // Points land server-side whenever a parent finalises a healthy meal a kid
 // voted for — which usually happens when that kid isn't even looking at the
 // app. The parent gets an immediate diff in their own finalise toast (see
@@ -646,16 +610,6 @@ async function celebrateNewPoints(personId) {
 }
 
 async function boot() {
-  // A magic vote link: ?t=<token>#/vote — the token IS the credential (same
-  // trust level as this app's PINs), so this logs straight in as whoever it
-  // belongs to with no PIN prompt, then drops them on Vote. Only handled once
-  // per page load, and the token is stripped from the URL immediately after
-  // resolving so it doesn't linger in browser history or a screenshot.
-  const linkToken = new URLSearchParams(location.search).get("t");
-  // Stripped from the URL straight away so it can't linger in history or a
-  // screenshot. Acting on it waits until the people list is loaded, below.
-  if (linkToken) history.replaceState(null, "", location.pathname + (location.hash || "#/vote"));
-
   // Wire navigation FIRST. If bootstrap fails after this, tabs still respond
   // and each one reports the real error instead of doing nothing.
   if (!boot.wired) {
@@ -677,105 +631,25 @@ async function boot() {
   }
 
   const b = await api.get("/api/bootstrap");
+  S.meId = b.meId;
   S.weeks = b.weeks;
   S.people = b.people;
   S.aisles = b.aisles;
   S.tags = b.tags || [];
   applyTheme();
 
-  // A magic vote link says WHO you are, and stops there. It used to sign you
-  // straight in, which meant holding someone else's link walked past their
-  // PIN entirely — so a kid with a sibling's link simply became that sibling.
-  // Now it skips the "who's this?" list and goes straight to their PIN.
-  if (linkToken && !me()) {
-    try {
-      const who = await api.get(`/api/person/by-token?t=${encodeURIComponent(linkToken)}`);
-      if (!who.error && await selectPerson(who.id)) {
-        if (!location.hash || location.hash === "#/") location.hash = "#/vote";
-      }
-    } catch (err) { /* offline or bad link — fall through to the normal gate */ }
-  }
-
-  // A brand-new install: nothing but the "Family" placeholder exists. Only
-  // the chicken-and-egg case (the very first real person, with nobody yet
-  // around to authorise adding them) needs a dedicated screen — everyone
-  // after that is just the normal, already-working Settings > Family flow,
-  // reached the moment this first person is signed in.
-  if (S.needsSetup) {
+  document.querySelector(".tabs").style.display = "";
+  if (b.mustChangePassword) {
+    S.pauseSync = true;
     document.querySelector(".tabs").style.display = "none";
-    document.getElementById("voteFab")?.classList.add("hidden");
     document.getElementById("view").innerHTML = `
-      <div class="login-gate">
-        <h1>Welcome</h1>
-        <p class="subtitle">Let's get your household started. What's your name? You'll be able to
-          add everyone else, and set PINs, from Settings once you're in.</p>
-        <div class="card pad" style="max-width:340px;margin:0 auto">
-          <label class="field"><span>Your name</span>
-            <input id="setupName" placeholder="e.g. Alex" maxlength="30" autocomplete="off"></label>
-          <label class="field"><span>Role</span>
-            <select id="setupRole">
-              <option value="parent">Parent</option>
-              <option value="child">Child</option>
-            </select></label>
-          <button id="setupGo" class="primary" style="width:100%">Get started →</button>
-        </div>
-      </div>`;
-    const nameInput = document.getElementById("setupName");
-    nameInput.focus();
-    const go = document.getElementById("setupGo");
-    const submit = busy(go, async () => {
-      const name = nameInput.value.trim();
-      if (!name) return toast("Enter a name first.", "bad");
-      const res = await api.post("/api/person", { name, role: document.getElementById("setupRole").value })
-        .catch(() => null);
-      if (!res || res.error) return toast(res?.error || OFFLINE_MSG, "bad");
-      S.meId = res.person.id;
-      localStorage.setItem("mealplan-me", S.meId);
-      document.querySelector(".tabs").style.display = "";
-      boot();
-    });
-    go.onclick = submit;
-    nameInput.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+      <div class="login-gate"><h1>Choose your password</h1>
+        <p class="subtitle">You signed in with a temporary one. Pick your own to carry on.</p>
+        ${changePasswordForm(true)}</div>`;
+    wirePasswordForm(() => location.reload());
     return;
   }
-
-  // No valid remembered identity (fresh browser, cleared storage, someone
-  // else's device) — don't guess. Nothing else renders until a person's
-  // actually picked, PIN checked if they have one.
-  if (!me()) {
-    document.querySelector(".tabs").style.display = "none";
-    document.getElementById("voteFab")?.classList.add("hidden");
-    document.getElementById("view").innerHTML = `
-      <div class="login-gate">
-        <h1>Who's this?</h1>
-        <p class="subtitle">Pick yourself to continue. You'll be asked for your PIN if you have one set.</p>
-        <div class="gate-people">
-          ${S.people.filter((p) => !p.is_placeholder).map((p) => `<button class="gate-person" data-id="${p.id}">${esc(p.name)}${p.has_pin ? " 🔒" : ""}</button>`).join("")}
-        </div>
-      </div>`;
-    document.querySelectorAll(".gate-person").forEach((btn) => {
-      btn.onclick = busy(btn, async () => {
-        if (await selectPerson(+btn.dataset.id)) {
-          document.querySelector(".tabs").style.display = "";
-          boot();
-        }
-      });
-    });
-    return;
-  }
-
-  const who = document.getElementById("whoPicker");
-  who.innerHTML = S.people
-    .filter((p) => !p.is_placeholder)
-    .map((p) => `<option value="${p.id}" ${p.id === S.meId ? "selected" : ""}>${esc(p.name)}${p.has_pin ? " 🔒" : ""}</option>`)
-    .join("");
-  who.dataset.prev = S.meId || "";
-  who.onchange = busy(who, async (e) => {
-    const targetId = +e.target.value;
-    if (!(await selectPerson(targetId))) { who.value = who.dataset.prev; return; }
-    who.dataset.prev = targetId;
-    route();
-  });
+  if (!boot.celebrated) { boot.celebrated = true; celebrateNewPoints(S.meId); }
 
   S.thisWeekId = b.thisWeekId;
   S.nextWeekId = b.nextWeekId;
@@ -786,8 +660,8 @@ async function boot() {
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
   S.morrisonsEnabled = !!b.morrisonsEnabled;
+  S.vetoesPerPerson = b.vetoesPerPerson ?? 1;
   S.shopDone = !!b.shopDone;
-  S.needsSetup = !!b.needsSetup;
   DAYS = WEEKDAY_NAMES.slice(S.weekStartDow).concat(WEEKDAY_NAMES.slice(0, S.weekStartDow));
   SHORT = WEEKDAY_SHORT.slice(S.weekStartDow).concat(WEEKDAY_SHORT.slice(0, S.weekStartDow));
   if (!S.weekId || !S.weeks.some((w) => w.id === S.weekId)) S.weekId = S.thisWeekId;
@@ -1451,6 +1325,8 @@ async function viewShopping() {
     ${(S.weeks.find((w) => w.id === S.weekId) || {}).shop_closed ? "" : `<button id="backToPantryBtn" class="link-toggle no-print" style="margin-bottom:8px">← Back to cupboard check</button>`}
     ${(S.weeks.find((w) => w.id === S.weekId) || {}).shop_closed
       ? (parent ? `<button id="shopCloseBtn" data-closed="0" class="shop-done-btn no-print">🔒 Shopping done — Reopen?</button>
+          <button id="scanReceiptBtn" class="plan-done-btn no-print" style="position:static">🧾 Scan receipt</button>
+          <div id="receiptSummary" class="notice small receipt-summary" hidden></div>
           ${(() => { const w = S.weeks.find((x) => x.id === S.weekId) || {}; const av = shopAverage();
             return `<button id="shopTotalBtn" class="notice small no-print shop-total-line">${w.shop_total != null
               ? `💷 Spent <strong>£${w.shop_total.toFixed(2)}</strong>${av ? ` · average £${av.avg.toFixed(2)} over ${av.n} shop${av.n === 1 ? "" : "s"}` : ""} <span class="hint" style="display:inline">· edit</span>`
@@ -1616,6 +1492,15 @@ async function viewShopping() {
   const shoppingText = () => groups.map((g) =>
     g.aisle.toUpperCase() + "\n" + g.items.map((i) => `  ${i.qty}  ${i.item}`).join("\n")).join("\n\n");
 
+  const scanBtn = document.getElementById("scanReceiptBtn");
+  if (scanBtn) scanBtn.onclick = () => receiptFlow(S.weekId);
+  const rs = document.getElementById("receiptSummary");
+  if (rs) api.post("/api/receipt/summary", { week_id: S.weekId }).then(({ summary }) => {
+    if (!summary) return;
+    const b = summary.by, f = (k) => (b[k] ? `£${b[k].toFixed(2)}` : "£0");
+    rs.innerHTML = `🧾 🍽️ Meals ${f("meal")} · 🛒 Extras ${f("extra")} · 🍭 Treats ${f("treat")}${b.oneoff ? ` · ↩️ One-offs ${f("oneoff")}` : ""}`;
+    rs.hidden = false;
+  }).catch(() => {});
   const shopTotalBtn = document.getElementById("shopTotalBtn");
   if (shopTotalBtn) shopTotalBtn.onclick = busy(shopTotalBtn, async () => {
     const w = S.weeks.find((x) => x.id === S.weekId) || {};
@@ -1626,7 +1511,7 @@ async function viewShopping() {
     const closing = shopClose.dataset.closed === "1";
     if (closing && !(await confirmDialog("Lock this week's list? Nobody will be able to add extras to it after this.",
         { title: "Shopping done?", okLabel: "Lock it" }))) return;
-    await api.post("/api/week/shop-close", { week_id: S.weekId, closed: closing ? 1 : 0 });
+    await api.post("/api/week/shop-close", { week_id: S.weekId, closed: closing ? 1 : 0, actor_id: me()?.id });
     if (closing) await askShopTotal(S.weekId);
     await boot();
   });
@@ -1867,7 +1752,7 @@ async function viewRegulars() {
             <span class="extra-qty-val">${qty || "0"}</span>
             <button class="stepBtn stepPlus" data-id="${e.id}" data-qty="${qty + 1}" title="One more">+</button>
           </div>
-          <span class="shop-item">${esc(e.item)}${e.recurring ? ` <span class="tag tag-protein">weekly</span>` : ""}${parent && e.adults_only ? ` <span title="Grown-ups only" aria-label="Grown-ups only">🔒</span>` : ""}</span>
+          <span class="shop-item">${esc(e.item)}${e.recurring ? ` <span class="tag tag-protein">weekly</span>` : ""}${parent && e.adults_only ? ` <span class="tag" title="Hidden from kids on their Extras list">grown-ups only</span>` : ""}</span>
           ${parent ? `<span class="extra-actions">
             <button class="editExtra ghost" data-id="${e.id}" aria-label="Edit name, amount, aisle" title="Edit">✏️</button>
 
@@ -2195,7 +2080,8 @@ async function viewVote() {
   // and not necessarily "next week" if that one's already been locked in.
   const voteWeekId = S.voteWeekId;
   if (!S.meals.length) S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
-  const { tally, my_veto, target } = await api.get(`/api/poll?id=${voteWeekId}&person=${S.meId || ""}`);
+  const { tally, my_vetoes = [], vetoes_allowed: vAllowed = 1, target } = await api.get(`/api/poll?id=${voteWeekId}&person=${S.meId || ""}`);
+  const vLeft = vAllowed - my_vetoes.length;
   const parent = isParent();
   const typeFilter = S.voteTypeFilter || "";
 
@@ -2264,7 +2150,7 @@ async function viewVote() {
 
     <div class="vote-grid">
       ${ranked.map((m, i) => {
-        const isMyVeto = my_veto === m.id;
+        const isMyVeto = my_vetoes.includes(m.id);
         const vetoedByAnyone = m.v.vetoed;
         const needsIngredients = !m.ingredients || !m.ingredients.length;
         // Already-liked meals stay tappable regardless — that's the only way
@@ -2299,8 +2185,8 @@ async function viewVote() {
 
             </span>
           </button>
-          ${isMyVeto || (!my_veto && !m.v.total) ? `<button class="veto-btn ${isMyVeto ? "on" : ""}" data-veto="${m.id}"
-            title="${isMyVeto ? "Undo your veto" : "Veto — you get one"}">${isMyVeto ? "↩️" : "🚫"}</button>` : ""}
+          ${isMyVeto || (vLeft > 0 && !m.v.total && !vetoedByAnyone) ? `<button class="veto-btn ${isMyVeto ? "on" : ""}" data-veto="${m.id}"
+            title="${isMyVeto ? "Undo your veto" : `Veto (${vLeft} left)`}">${isMyVeto ? "↩️" : "🚫"}</button>` : ""}
           ${needsIngredients ? `<div class="vote-ing-warn">
               ${ingredientsWarningHTML(true)}
               ${parent ? `<button class="addIngBtn ghost" data-id="${m.id}">+ Add ingredients</button>` : ""}
@@ -2473,7 +2359,8 @@ async function viewSettings() {
 
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Settings</h1></header>
-    <button id="switchPersonBtn" class="notice small" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">${meBadge()} Signed in as <strong>${esc(me()?.name || "nobody")}</strong> <span style="margin-left:auto">Switch →</span></button>
+    <div class="notice small" style="display:flex;align-items:center;gap:8px">${meBadge()} Signed in as <strong>${esc(me()?.name || "")}</strong> <span class="hint" style="display:inline">(${esc(me()?.username || "")})</span>
+      <button id="signOutBtn" class="ghost" style="margin-left:auto">Sign out</button></div>
     ${isInstalled() ? "" : `<button id="installSettings" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">📲 <strong>Add to home screen</strong> →</button>`}
     <a href="#/history" class="notice small" style="display:block;text-decoration:none;color:var(--text)">🕘 <strong>Past weeks</strong> →</a>
     <button id="extraLogBtn" class="notice small" style="display:block;width:100%;text-align:left;color:var(--text);border:none;cursor:pointer">🧾 <strong>Extras history</strong> — who added what →</button>
@@ -2490,7 +2377,7 @@ async function viewSettings() {
       <label class="row"><span class="row-label">Compact view<span class="when">less space between things, on this device</span></span>
         <input type="checkbox" id="compactToggle" ${document.documentElement.classList.contains("compact") ? "checked" : ""}></label>
       <label class="row"><span class="row-label">Look<span class="when">how the app looks on your screen</span></span>
-        <select id="themeSel">${[["classic", "Plain"], ["fun", "Fun colours"], ["notepad", "Notepad"]]
+        <select id="themeSel">${THEMES
           .map(([v, l]) => `<option value="${v}" ${(p.theme || "classic") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <div class="row"><span class="row-label">My icon<span class="when">shows next to your votes</span></span>
         <button id="myIconBtn" class="icon-current">${p.emoji ? esc(p.emoji) : `<span class="voter-chip" style="background:${p.color || "#888"}">${esc(p.name[0])}</span>`} change</button></div>
@@ -2504,15 +2391,12 @@ async function viewSettings() {
       ` : `<p class="empty">Pick who you are, top right.</p>`}
     </div>
 
-    <h2 class="sec-title">My PIN</h2>
-    <p class="subtitle">Stops others signing in as you.</p>
-    <div class="card pad">
-      ${p ? `
-      <div class="add-extra">
-        <button id="pinSet">${p.has_pin ? "Change PIN" : "Set PIN"}</button>
-        ${p.has_pin && isAdmin() ? `<button id="pinClear" class="ghost">Remove PIN</button>` : ""}
-      </div>` : ""}
-    </div>
+    ${p ? `<h2 class="sec-title">Notifications</h2>
+    <p class="subtitle">On this device. Works once the app's installed to your home screen.</p>
+    <div class="card pad" id="pushCard"><p class="empty">Checking…</p></div>` : ""}
+
+    <h2 class="sec-title">My password</h2>
+    ${changePasswordForm(false)}
 
     <h2 class="sec-title">Family</h2>
     <p class="subtitle">Parents' votes outrank children's.</p>
@@ -2521,7 +2405,7 @@ async function viewSettings() {
         <div class="person-row-full">
           <div class="row person-line">
             <span class="person-icon">${x.emoji ? esc(x.emoji) : `<span class="voter-chip" style="background:${x.color || VOTER_FALLBACK[x.id % VOTER_FALLBACK.length]}">${esc(x.name[0])}</span>`}</span>
-            <span class="row-label">${esc(x.name)} <span class="hint" style="display:inline">${x.role === "parent" ? "Parent" : "Child"}${x.is_admin ? " · admin" : ""}</span>${x.pin_default ? ` <span class="tag" style="color:var(--low)">default PIN</span>` : ""}</span>
+            <span class="row-label">${esc(x.name)} <span class="hint" style="display:inline">${x.role === "parent" ? "Parent" : "Child"}${x.is_admin ? " · admin" : ""}</span>${isParent() ? ` <span class="hint" style="display:inline">· ${esc(x.username || "")}</span>` : ""}${isParent() && !x.has_password ? ` <span class="tag" style="color:var(--low)">no password yet</span>` : ""}</span>
             ${isParent() ? `<button class="personMenu ghost" data-id="${x.id}" aria-label="Options for ${esc(x.name)}">⋯</button>` : ""}
           </div>
           <div class="row person-row day-hidden">
@@ -2529,10 +2413,9 @@ async function viewSettings() {
               <option value="parent" ${x.role === "parent" ? "selected" : ""}>Parent</option>
               <option value="child"  ${x.role === "child" ? "selected" : ""}>Child</option>
             </select>
-            ${isParent() ? `<button class="voteLinkBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Share a link that logs straight in as ${esc(x.name)}, no PIN">🔗 Vote link</button>
-              <button class="voteLinkRegen ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Kill the old link and make a new one">♻</button>
-              <button class="resetVotesBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Clear ${esc(x.name)}'s likes and veto for this week">↺ Reset this week's votes</button>
-              <button class="resetPinBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}">🔑 Reset PIN</button>` : ""}
+            ${isParent() ? `<button class="resetVotesBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" title="Clear ${esc(x.name)}'s likes and veto for this week">↺ Reset this week's votes</button>
+              ${isAdmin() || x.role !== "parent" ? `<button class="setPwBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}">🔑 Set password</button>` : ""}` : ""}
+            ${isAdmin() ? `<button class="usernameBtn ghost" data-id="${x.id}" data-name="${esc(x.name)}" data-u="${esc(x.username || "")}">Username</button>` : ""}
             ${isAdmin() ? `<button class="adminToggle" data-id="${x.id}" data-on="${x.is_admin ? 1 : 0}">${x.is_admin ? "Remove admin" : "Make admin"}</button>` : ""}
             ${isAdmin() ? `<button class="delPerson" data-id="${x.id}" aria-label="Remove ${esc(x.name)}">✕ Delete</button>` : ""}
           </div>
@@ -2560,6 +2443,9 @@ async function viewSettings() {
         <input id="historicEditsChk" type="checkbox" ${S.allowHistoricEdits ? "checked" : ""}></label>
       <p class="hint">Off by default: days that have already been and gone show as read-only history
         on the Plan. Turn on to correct something after the fact.</p>
+      <label class="field"><span>Vetoes per person each week</span>
+        <input id="vetoesSel" type="number" min="0" max="10" value="${S.vetoesPerPerson}"></label>
+      <p class="hint">0 switches vetoes off.</p>
       <label class="field field-check"><span>Morrisons prices (beta)</span>
         <input id="morrisonsChk" type="checkbox" ${S.morrisonsEnabled ? "checked" : ""}></label>
       <p class="hint">Adds Morrisons as a second store when linking prices on the Prices page. While off, the app never contacts Morrisons.</p>
@@ -2617,20 +2503,27 @@ async function viewSettings() {
     const id = x.id, admin = isAdmin();
     const click = (sel) => { closeModal(); document.querySelector(`${sel}[data-id="${id}"]`)?.click(); };
     const acts = [
-      ["voteLinkBtn", "🔗 Share vote link"],
-      ["voteLinkRegen", "♻️ Make a new vote link"],
       ["resetVotesBtn", "↺ Reset this week's votes"],
-      ["resetPinBtn", "🔑 Reset PIN"],
+      (admin || x.role !== "parent") && x.id !== S.meId && ["setPwBtn", "🔑 Set a temporary password"],
+      admin && ["usernameBtn", `👤 Username: ${x.username || "—"}`],
       admin && ["adminIcon", `${x.emoji || "🙂"} Change icon`],
       admin && ["role", x.role === "parent" ? "👶 Make a child" : "🧑 Make a parent"],
       admin && ["adminToggle", x.is_admin ? "Remove admin" : "Make admin"],
       admin && ["delPerson", "✕ Delete"],
     ].filter(Boolean);
     openModal(x.name, `<div class="action-sheet">
+      ${admin ? `<label class="field"><span>Look</span><select id="sheetTheme">${THEMES.map(([v, l]) =>
+        `<option value="${v}" ${(x.theme || "classic") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
       ${admin ? `<div class="color-swatches sheet-swatches">${KID_COLORS.map((c) =>
         `<button class="swatch sheetSwatch ${x.color === c ? "on" : ""}" data-color="${c}" style="background:${c}" aria-label="Colour"></button>`).join("")}
         <button class="swatch swatch-clear sheetSwatch ${!x.color ? "on" : ""}" data-color="">✕</button></div>` : ""}
       ${acts.map(([k, l]) => `<button class="sheetBtn ${k === "delPerson" ? "danger-text" : ""}" data-k="${k}">${l}</button>`).join("")}</div>`);
+    const st = document.getElementById("sheetTheme");
+    if (st) st.onchange = busy(st, async () => {
+      const res = await api.post("/api/person", { id, admin_id: S.meId, theme: st.value });
+      if (res.error) return toast(res.error, "bad");
+      closeModal(); await boot(); viewSettings(); toast(`${x.name}'s look changed.`, "good");
+    });
     document.querySelectorAll(".sheetSwatch").forEach((sw) => (sw.onclick = busy(sw, async () => {
       const res = await api.post("/api/person", { id, admin_id: S.meId, color: sw.dataset.color || null });
       if (res.error) return toast(res.error, "bad");
@@ -2650,36 +2543,20 @@ async function viewSettings() {
     if (res.error) return toast(res.error, "bad");
     await boot(); viewSettings();
   })));
-  document.querySelectorAll(".voteLinkBtn").forEach((b) => (b.onclick = busy(b, async () => {
-    const res = await api.get(`/api/person/link?id=${b.dataset.id}&admin_id=${S.meId}`);
-    if (res.error) return toast(res.error, "bad");
-    const url = `${location.origin}${location.pathname}?t=${res.token}#/vote`;
-    const forThem = S.people.find((p) => p.id === +b.dataset.id);
-    const note = forThem?.has_pin
-      ? `Opens straight to ${b.dataset.name}'s own login — they still need their PIN, so it's fine even if someone else gets hold of it.`
-      : `Opens straight in as ${b.dataset.name} — they don't have a PIN set, so anyone with this link does too.`;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: "Vote now", text: `Vote now for next week: ${url}` });
-        return;
-      } catch { /* dismissed, or not allowed — show the link instead */ }
-    }
-    shareLinkDialog(`${b.dataset.name}'s vote link`, url, note);
+  document.querySelectorAll(".setPwBtn").forEach((b) => (b.onclick = busy(b, async () => {
+    const pw = prompt(`Temporary password for ${b.dataset.name} (at least 8 characters). They'll choose their own when they sign in.`);
+    if (!pw) return;
+    try {
+      const r = await api.post("/api/person/set-password", { id: +b.dataset.id, password: pw });
+      toast(`Done. ${b.dataset.name} signs in as "${r.username}" with that password.`, "good", 7000);
+      await boot(); viewSettings();
+    } catch (ex) { toast(ex.message, "bad"); }
   })));
-  document.querySelectorAll(".voteLinkRegen").forEach((b) => (b.onclick = busy(b, async () => {
-    if (!(await confirmDialog(
-        `Any link already sent to ${b.dataset.name} stops working. Only do this if the old one leaked or went to the wrong person.`,
-        { title: `Replace ${b.dataset.name}'s vote link?`, danger: true, okLabel: "Replace it" }))) return;
-    const r = await api.post("/api/person/link/regenerate", { id: +b.dataset.id, admin_id: S.meId });
-    if (r.error) return toast(r.error, "bad");
-    toast(`Done — tap 🔗 Vote link to get ${b.dataset.name}'s new one.`, "good");
-  })));
-  document.querySelectorAll(".resetPinBtn").forEach((b) => (b.onclick = busy(b, async () => {
-    if (!(await confirmDialog(`${b.dataset.name}'s PIN goes back to 0000, and they'll be asked to pick a new one next time they sign in.`,
-        { title: `Reset ${b.dataset.name}'s PIN?`, okLabel: "Reset" }))) return;
-    const r = await api.post("/api/person/reset-pin", { id: +b.dataset.id, admin_id: S.meId });
-    if (r.error) return toast(r.error, "bad");
-    toast(`${b.dataset.name}'s PIN is now 0000.`, "good");
+  document.querySelectorAll(".usernameBtn").forEach((b) => (b.onclick = busy(b, async () => {
+    const u = prompt(`Username for ${b.dataset.name}`, b.dataset.u);
+    if (!u || u === b.dataset.u) return;
+    try { await api.post("/api/person/username", { id: +b.dataset.id, username: u }); await boot(); viewSettings(); }
+    catch (ex) { toast(ex.message, "bad"); }
   })));
   document.querySelectorAll(".resetVotesBtn").forEach((b) => (b.onclick = busy(b, async () => {
     if (!(await confirmDialog(
@@ -2706,7 +2583,6 @@ async function viewSettings() {
       } catch (e2) { return toast(e2.message, "bad"); }
     }
     if (res?.error) return toast(res.error, "bad");
-    if (S.meId === +b.dataset.id) { S.meId = null; localStorage.removeItem("mealplan-me"); }
     await boot(); viewSettings();
   })));
   const addPerson = document.getElementById("addPerson");
@@ -2718,10 +2594,15 @@ async function viewSettings() {
     await boot(); viewSettings();
   });
 
-  const spb = document.getElementById("switchPersonBtn");
-  if (spb) spb.onclick = switchPerson;
+  const sob = document.getElementById("signOutBtn");
+  if (sob) sob.onclick = busy(sob, async () => {
+    await api.post("/api/logout", {}).catch(() => {});
+    location.reload();
+  });
+  wirePasswordForm(() => viewSettings());
   const installSettings = document.getElementById("installSettings");
   if (installSettings) installSettings.onclick = showInstall;
+  if (p) renderPushCard(p);
   const extraLogBtn = document.getElementById("extraLogBtn");
   if (extraLogBtn) extraLogBtn.onclick = busy(extraLogBtn, async () => {
     const { log } = await api.get(`/api/extra-log?person=${S.meId || ""}`);
@@ -2760,25 +2641,6 @@ async function viewSettings() {
     await boot(); viewSettings();
   })));
 
-  const pinSet = document.getElementById("pinSet");
-  if (pinSet) pinSet.onclick = busy(pinSet, async () => {
-    const entry = await pinPad({ title: p.has_pin ? "Choose a new 4-digit PIN" : "Choose a 4-digit PIN" });
-    if (!entry) return;
-    try {
-      const res = await api.post("/api/person/set-pin", { id: p.id, by: p.id, pin: entry.digits });
-      if (res.error) return toast(res.error, "bad");
-    } catch (err) { return toast(OFFLINE_MSG, "bad"); }
-    await boot(); viewSettings();
-  });
-  const pinClear = document.getElementById("pinClear");
-  if (pinClear) pinClear.onclick = busy(pinClear, async () => {
-    if (!(await confirmDialog(`Remove ${p.name}'s PIN? Anyone will be able to switch to them with no PIN check.`,
-        { danger: true, okLabel: "Remove PIN" }))) return;
-    try { await api.post("/api/person/clear-pin", { id: p.id, admin_id: p.id }); }
-    catch (err) { return toast(OFFLINE_MSG, "bad"); }
-    await boot(); viewSettings();
-  });
-
   document.querySelectorAll(".adminToggle").forEach((b) => (b.onclick = busy(b, async () => {
     await api.post("/api/person", {
       id: +b.dataset.id, name: S.people.find((x) => x.id === +b.dataset.id).name,
@@ -2802,6 +2664,12 @@ async function viewSettings() {
     await boot(); viewSettings();
   });
 
+  const vetoesSel = document.getElementById("vetoesSel");
+  if (vetoesSel) vetoesSel.onchange = busy(vetoesSel, async () => {
+    const res = await api.post("/api/config", { vetoes_per_person: +vetoesSel.value || 0, admin_id: p.id });
+    if (res.error) return toast(res.error, "bad");
+    await boot(); toast(`Vetoes per person: ${+vetoesSel.value || 0}`, "good");
+  });
   const morrisonsChk = document.getElementById("morrisonsChk");
   if (morrisonsChk) morrisonsChk.onchange = busy(morrisonsChk, async (e) => {
     const res = await api.post("/api/config", { morrisons_enabled: e.target.checked ? 1 : 0, admin_id: p.id });
@@ -2882,7 +2750,6 @@ async function viewRewards() {
       <div class="reward-balance-big">${myBalance}</div>
       <div class="hint">points ${esc(me()?.name || "you")} can spend</div>
       <div style="margin-top:8px">${myEarned} earned all time${myEarned - myBalance > 0 ? ` · ${myEarned - myBalance} spent` : ""}</div>
-      <button id="rewardSwitch" class="link-toggle" style="display:block;margin:8px auto 0">Not ${esc(me()?.name || "you")}? Switch</button>
       ${me() ? `<button id="rewardIconBtn" class="icon-current" style="margin-top:10px">${me().emoji ? esc(me().emoji) + " my icon" : "🙂 pick my icon"}</button>` : ""}
     </div>
 
@@ -2970,8 +2837,6 @@ async function viewRewards() {
     ` : ""}
     ` : ""}`;
 
-  const rsw = document.getElementById("rewardSwitch");
-  if (rsw) rsw.onclick = switchPerson;
   const rib = document.getElementById("rewardIconBtn");
   if (rib) rib.onclick = () => pickIcon(S.meId, false);
   document.querySelectorAll(".grantBtn").forEach((b) => (b.onclick = async () => {
@@ -3150,7 +3015,10 @@ setInterval(async () => {
       liveV = v;
       if (typeof S !== "undefined" && S.meId && location.hash !== "") {
         const y = scroller().scrollTop;
-        await route();
+        // Full refresh, not just the page: people's settings (look, colour,
+        // icon) may have been changed on another device.
+        await boot();
+        applyTheme();
         scroller().scrollTo(0, y);
       }
       return;
@@ -3620,4 +3488,115 @@ function sameAmountVerdict(a, matches) {
   const diff = best.diff, how = best.packs > 1 ? ` <span class="hint" style="display:inline">(${best.packs} × ${esc(best.m.size)})</span>` : "";
   if (Math.abs(diff) < 0.05) return `About the same${how}`;
   return `<strong>${diff > 0 ? "Morrisons" : "Aldi"}</strong> +£${Math.abs(diff).toFixed(2)} for the same amount${how}`;
+}
+
+/* --------------------------------------------------------- receipt scanner */
+// Text comes from the phone's own Live Text (photo → select text → copy), so
+// no OCR library and the photo never leaves the phone. Lines are matched by
+// Aldi's product code; anything not on this week's list starts as a treat.
+function receiptFlow(weekId) {
+  openModal("Scan receipt", `
+    <ol class="install-steps" style="font-size:.9rem;margin-top:0">
+      <li>Open the <strong>Camera</strong> and point it at the receipt (or take a photo).</li>
+      <li>Tap the <strong>text icon</strong> ▤ in the corner, then <strong>Select All → Copy</strong>.</li>
+      <li>Paste it below.</li></ol>
+    <textarea id="rcText" rows="8" placeholder="Paste receipt text here" style="width:100%;font-family:ui-monospace,monospace;font-size:16px"></textarea>
+    <button id="rcRead" class="plan-done-btn" style="position:static;margin-top:10px">Read receipt</button>`);
+  const go = document.getElementById("rcRead");
+  go.onclick = busy(go, async () => {
+    const r = await api.post("/api/receipt/parse", { actor_id: S.meId, week_id: weekId, text: document.getElementById("rcText").value })
+      .catch((e) => ({ error: e.message }));
+    if (r.error) return toast(r.error, "bad");
+    receiptReview(weekId, r);
+  });
+}
+function receiptReview(weekId, r) {
+  const L = r.lines;
+  const KIND = { meal: "🍽️ Meal", extra: "🛒 Extra", treat: "🍭 Treat", oneoff: "↩️ One-off", regular: "🔁 Regular" };
+  const draw = () => {
+    const sum = (k) => L.filter((l) => l.kind === k || (k === "extra" && l.kind === "regular")).reduce((s, l) => s + l.amount, 0);
+    const open = L.filter((l) => l.undecided && !l.decided);
+    const off = r.total != null && Math.abs(r.total - r.sum) > 0.01;
+    document.getElementById("modalBody").innerHTML = `
+      <div class="notice small ${off ? "warn" : "good"}">${off
+        ? `⚠️ Lines add up to £${r.sum.toFixed(2)} but the receipt says £${r.total.toFixed(2)} — a line may have been misread.`
+        : `✓ ${r.items} items, £${(r.total ?? r.sum).toFixed(2)} — all lines read.`}</div>
+      <div class="rc-summary">🍽️ £${sum("meal").toFixed(2)} · 🛒 £${sum("extra").toFixed(2)} · 🍭 £${sum("treat").toFixed(2)}${sum("oneoff") ? ` · ↩️ £${sum("oneoff").toFixed(2)}` : ""}</div>
+      ${open.length ? `<h4>Not on your list (${open.length}) — what were they?</h4>` : ""}
+      <div class="rc-lines">${L.map((l, i) => `<div class="rc-line ${l.undecided && !l.decided ? "open" : ""}">
+        <span class="rc-name">${l.qty > 1 ? `${l.qty} × ` : ""}${esc(l.name)}${l.remembered ? ` <span class="hint" style="display:inline">(remembered)</span>` : ""}</span>
+        <span class="rc-amt">£${l.amount.toFixed(2)}</span>
+        ${l.undecided || l.decided ? `<span class="rc-choices">${["regular", "treat", "meal", "oneoff"].map((k) =>
+          `<button class="rcPick ${l.kind === k && l.decided ? "on" : ""}" data-i="${i}" data-k="${k}">${KIND[k]}</button>`).join("")}</span>`
+          : `<span class="rc-kind">${KIND[l.kind] || ""}</span>`}
+      </div>`).join("")}</div>
+      <button id="rcSave" class="plan-done-btn" style="position:static;margin-top:12px">Save receipt${open.length ? ` (${open.length} left as treats)` : ""}</button>`;
+    document.querySelectorAll(".rcPick").forEach((b) => (b.onclick = () => {
+      const l = L[+b.dataset.i]; l.kind = b.dataset.k; l.decided = true; draw();
+    }));
+    const save = document.getElementById("rcSave");
+    save.onclick = busy(save, async () => {
+      const res = await api.post("/api/receipt/save", { actor_id: S.meId, week_id: weekId, lines: L, total: r.total ?? r.sum });
+      if (res.error) return toast(res.error, "bad");
+      closeModal(); toast("Receipt saved.", "good"); await boot();
+    });
+  };
+  draw();
+}
+if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// ---- Push notifications (per device, per person) ----
+function b64uToBytes(s) {
+  const b = atob((s + "=".repeat((4 - s.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+async function currentSub() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !isSecureContext) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function renderPushCard(p) {
+  const card = document.getElementById("pushCard");
+  if (!card) return;
+  const st = await api.get(`/api/push/state?person_id=${p.id}`);
+  const supported = "serviceWorker" in navigator && "PushManager" in window && isSecureContext;
+  if (!st.enabled) { card.innerHTML = `<p class="empty">Not available on this server.</p>`; return; }
+  if (!supported) {
+    card.innerHTML = `<p class="empty">${isSecureContext ? "This browser can't do notifications. On iPhone, add the app to your home screen first." : "Needs the https:// address."}</p>`;
+    return;
+  }
+  const sub = await currentSub();
+  const denied = Notification.permission === "denied";
+  const kinds = Object.entries(st.kinds).filter(([, k]) => !k.parents_only || p.role === "parent");
+  card.innerHTML = `
+    <div class="row"><span class="row-label">This device<span class="when">${denied ? "blocked — allow notifications for this app in your phone's settings" : sub ? "on" : "off"}</span></span>
+      ${denied ? "" : sub ? `<button id="pushOff" class="ghost">Turn off</button>` : `<button id="pushOn">Turn on</button>`}</div>
+    ${sub ? kinds.map(([k, v]) => `<label class="row"><span class="row-label">${esc(v.label)}</span>
+      <input type="checkbox" class="pushKind" data-k="${k}" ${st.off.includes(k) ? "" : "checked"}></label>`).join("")
+      + `<div class="add-extra"><button id="pushTest" class="ghost">Send a test</button></div>` : ""}`;
+  const on = document.getElementById("pushOn");
+  if (on) on.onclick = async () => {
+    try {
+      if (await Notification.requestPermission() !== "granted") return renderPushCard(p);
+      const reg = await navigator.serviceWorker.ready;
+      const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(st.key) });
+      await api.post("/api/push/subscribe", { person_id: p.id, sub: s.toJSON() });
+      toast("Notifications on", "good");
+    } catch (e) { toast("Couldn't turn on notifications: " + e.message, "bad"); }
+    renderPushCard(p);
+  };
+  const off = document.getElementById("pushOff");
+  if (off) off.onclick = async () => {
+    const s = await currentSub();
+    if (s) { await api.post("/api/push/unsubscribe", { endpoint: s.endpoint }); await s.unsubscribe(); }
+    renderPushCard(p);
+  };
+  card.querySelectorAll(".pushKind").forEach((c) => c.onchange = () =>
+    api.post("/api/push/prefs", { person_id: p.id,
+      off: [...card.querySelectorAll(".pushKind")].filter((x) => !x.checked).map((x) => x.dataset.k) }));
+  const test = document.getElementById("pushTest");
+  if (test) test.onclick = async () => {
+    const r = await api.post("/api/push/test", { person_id: p.id });
+    toast(r.devices ? "Sent — should arrive in a few seconds" : "No devices on for you yet");
+  };
 }

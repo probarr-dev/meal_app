@@ -12,3 +12,5 @@ services:
     environment:
       - MEALPLAN_DB=/data/mealplan.db
       - PORT=8080
+      # Needed for push notifications to Apple devices.
+      # - PUSH_CONTACT=mailto:you@example.com

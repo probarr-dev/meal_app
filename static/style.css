@@ -41,10 +41,6 @@ body {
 /* Native controls default to a light-theme look; hand them the accent so
    checkboxes and the like sit in the dark palette rather than on top of it. */
 input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
-.who-picker {
-  background:var(--card); color:var(--text); max-width:30vw;
-  border:1px solid var(--border); border-radius:8px; padding:5px 8px; font-size:.82rem;
-}
 .week-toggle { display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
 .week-toggle button {
   background:var(--card); color:var(--muted); border:none; border-radius:0;
@@ -61,7 +57,6 @@ input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
 }
 
 @media (max-width:560px) {
-  .who-picker { max-width:26vw; font-size:.76rem; }
   .week-toggle button { padding:7px 9px; font-size:.76rem; }
   .nav-toggle { display:block; }
   /* Page navigation moves into a slide-out drawer on mobile — seven tabs in
@@ -620,13 +615,7 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
 .login-gate { padding:60px 16px; text-align:center; max-width:360px; margin:0 auto; }
 .login-gate h1 { margin:0 0 6px; }
 .login-gate .subtitle { margin-bottom:24px; }
-.gate-people { display:flex; flex-direction:column; gap:10px; }
-.gate-person {
-  padding:14px; border-radius:12px; font-size:1.05rem; font-weight:600;
-  background:var(--card); border:1px solid var(--border); color:var(--text);
-}
-.gate-person:hover { border-color:var(--accent); }
-
+.login-gate .field { text-align:left; }
 /* Fun theme — opt-in per person, from Settings. Brighter and rounder, but
    still uses the same structure so nothing breaks; a parent who never
    switches it on never sees it. */
@@ -746,33 +735,11 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
    numeric keypad, which is the one place (PIN entry) that actually matters. */
 .modal-actions .danger { background:var(--bad); border-color:var(--bad); }
 
-.pin-dots { display:flex; gap:14px; justify-content:center; margin:18px 0 6px; }
-.pin-dot {
-  width:16px; height:16px; border-radius:50%; border:2px solid var(--border);
-  background:transparent; transition:background .12s ease, border-color .12s ease;
-}
-.pin-dot.filled { background:var(--accent); border-color:var(--accent); }
-.pin-dots.shake { animation:pin-shake .32s ease; }
-@keyframes pin-shake {
-  0%, 100% { transform:translateX(0); }
-  25% { transform:translateX(-8px); }
-  75% { transform:translateX(8px); }
-}
-.pin-error {
+.form-error, .pin-error {
   min-height:1.2em; text-align:center; color:var(--bad); font-size:.8rem;
   margin:4px 0 0; opacity:0; transition:opacity .15s ease;
 }
 .pin-error.show { opacity:1; }
-.pin-keys {
-  display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;
-  max-width:260px; margin:18px auto 4px;
-}
-.pin-key {
-  padding:16px 0; font-size:1.3rem; font-weight:600; border-radius:12px;
-  background:var(--bg); border:1px solid var(--border); color:var(--text);
-}
-.pin-key:active { background:color-mix(in srgb, var(--accent) 18%, var(--bg)); }
-
 .toast.good { border-color:var(--good); }
 
 /* ---- Plan: today's ingredients, inline -------------------------------- */
@@ -1013,8 +980,8 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
 :root[data-notepad="1"] .meal-card, :root[data-notepad="1"] .modal > * {
   background-color:var(--card);
   background-image:
-    linear-gradient(to right, transparent 26px, #e8a3a3 26px, #e8a3a3 28px, transparent 28px),
-    repeating-linear-gradient(to bottom, transparent 0, transparent 29px, #b9cbe6 29px, #b9cbe6 30px);
+    linear-gradient(to right, transparent 12px, var(--pad-margin) 12px, var(--pad-margin) 13px, transparent 13px),
+    repeating-linear-gradient(to bottom, transparent 0, transparent 29px, var(--pad-rule) 29px, var(--pad-rule) 30px);
   border:none; box-shadow:0 2px 6px rgba(80,60,20,.18);
   padding-left:36px;
 }
@@ -1217,12 +1184,12 @@ body:not([data-tab="plan"]):not([data-tab="shopping"]) .week-toggle { display:no
 /* 12: notepad — each row IS a ruled line, so text always sits on one */
 :root[data-notepad="1"] .card, :root[data-notepad="1"] .day,
 :root[data-notepad="1"] .meal-card, :root[data-notepad="1"] .modal > * {
-  background-image:linear-gradient(to right, transparent 26px, #e8a3a3 26px, #e8a3a3 28px, transparent 28px);
+  background-image:linear-gradient(to right, transparent 12px, var(--pad-margin) 12px, var(--pad-margin) 13px, transparent 13px);
 }
 :root[data-notepad="1"] .card .row, :root[data-notepad="1"] .shop-row,
 :root[data-notepad="1"] .extra-row, :root[data-notepad="1"] .redeemed-table td,
 :root[data-notepad="1"] .add-sheet-row, :root[data-notepad="1"] .vote-row {
-  border-bottom:1px solid #b9cbe6 !important; border-top:none !important;
+  border-bottom:1px solid var(--pad-rule) !important; border-top:none !important;
 }
 .tl-title .tl-lunch { flex-basis:100%; font-size:.82rem; font-weight:500; color:var(--muted); margin-bottom:-4px; }
 
@@ -1451,3 +1418,42 @@ body { min-height:calc(100vh + 1px); min-height:calc(100lvh + 1px); }
 @media (max-width:560px) { .tab-links a[data-tab="compare"] { display:none !important; } }
 body[data-tab="compare"] main { max-width:1150px; }
 .compare-total { font-size:1rem; }
+
+.receipt-summary { margin-top:-4px; }
+.rc-summary { font-weight:700; font-size:1.05rem; margin:8px 0; }
+.rc-lines { display:flex; flex-direction:column; }
+.rc-line { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; padding:7px 0; border-bottom:1px solid var(--border); }
+.rc-line.open { background:color-mix(in srgb, var(--low) 10%, transparent); padding-left:6px; padding-right:6px; border-radius:8px; }
+.rc-name { flex:1; min-width:0; }
+.rc-amt { font-weight:700; }
+.rc-kind { font-size:.8rem; color:var(--muted); flex-basis:100%; }
+.rc-choices { display:flex; flex-wrap:wrap; gap:4px; flex-basis:100%; }
+.rcPick { font-size:.8rem; padding:4px 8px; min-height:32px !important; border-radius:999px; }
+.rcPick.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* Notepad variants. Margin line: thin and close to the edge. */
+:root[data-notepad="1"] { --pad-rule:#b9cbe6; --pad-margin:#e8a3a3; }
+:root[data-notepad="1"] .card, :root[data-notepad="1"] .day,
+:root[data-notepad="1"] .meal-card, :root[data-notepad="1"] .modal > * { padding-left:22px !important; }
+:root[data-notepad="1"][data-pad="dark"] {
+  --bg:#171a22; --card:#232836; --border:#343b4d; --text:#ece6d6; --muted:#9aa0b0;
+  --accent:#ff8a65; --good:#3a9a64; --low:#f0b64a; --bad:#ff6b6b; --pad-rule:#3a4257; --pad-margin:#7a4450;
+  color-scheme:dark;
+}
+:root[data-notepad="1"][data-pad="dark"] .tabs { background:#1d212c; }
+:root[data-notepad="1"][data-pad="mint"] {
+  --bg:#dfece3; --card:#f3faf5; --border:#c2dccb; --text:#1d3a2c; --muted:#5d7a6b;
+  --accent:#2e7d5b; --good:#2e7d5b; --low:#b27a12; --bad:#b3261e; --pad-rule:#bcd9c8; --pad-margin:#e8b4a3;
+}
+:root[data-notepad="1"][data-pad="mint"] .tabs { background:#d3e5d9; }
+:root[data-notepad="1"][data-pad="rose"] {
+  --bg:#f2e2e7; --card:#fff6f8; --border:#e6cbd4; --text:#4a2334; --muted:#8a6573;
+  --accent:#c2416c; --good:#2f7d4a; --low:#b27a12; --bad:#b3261e; --pad-rule:#eccdd8; --pad-margin:#d99aae;
+}
+:root[data-notepad="1"][data-pad="rose"] .tabs { background:#ecd6dd; }
+
+/* Dark notepad: big action buttons in a deep green with light text, not pastel mint. */
+:root[data-notepad="1"][data-pad="dark"] .plan-done-btn,
+:root[data-notepad="1"][data-pad="dark"] #openAddExtra,
+:root[data-notepad="1"][data-pad="dark"] #exAdd { background:#2f7d52 !important; color:#f3efe4 !important; }
+:root[data-notepad="1"][data-pad="dark"] .usualChip { background:color-mix(in srgb, var(--good) 18%, var(--card)); border-color:color-mix(in srgb, var(--good) 45%, var(--border)); color:var(--text); }

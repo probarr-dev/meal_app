@@ -1,10 +1,11 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY server.py seed.py schema.sql ./
+# Only for push notifications; the app runs without it.
+RUN pip install --no-cache-dir cryptography
+COPY server.py auth.py push.py seed.py schema.sql ./
 COPY static/ ./static/
 
-# No pip install — stdlib only, so there's no dependency tree to rot.
 ENV MEALPLAN_DB=/data/mealplan.db
 ENV PORT=8080
 VOLUME ["/data"]
