@@ -611,9 +611,28 @@ def morrisons_enabled(conn):
 MORRISONS_LAST = 0.0
 
 
+PACK_WORDS = {"twin": 2, "twinpack": 2, "double": 2, "triple": 3, "treble": 3}
+
+
+def multipack_size(p):
+    """'Twinpack Mushy Peas' sized 300g is 2 x 300g. Applied on read, so cached
+    results are corrected too."""
+    size = p.get("size") or ""
+    if re.search(r"\d\s*x\s*\d", size, re.I):
+        return p
+    m = re.search(r"\b(twin|double|triple|treble)[\s-]?pack|\b(twinpack)\b", p.get("name", ""), re.I)
+    if m and re.match(r"\d", size):
+        return {**p, "size": f"{PACK_WORDS[(m.group(1) or m.group(2)).lower()]} x {size}"}
+    return p
+
+
 def morrisons_search(term):
     """Morrisons renders search results into the page itself; read the
     embedded product data. Only ever called when Morrisons is switched on."""
+    return [multipack_size(p) for p in _morrisons_search(term)]
+
+
+def _morrisons_search(term):
     hit = cache_get("m:" + term.lower())
     if hit is not None:
         return hit
