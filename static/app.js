@@ -37,8 +37,12 @@ function allowedTabsFor(p) {
   if (set.has("vote") || set.has("shopping")) set.add("extras");
   if (set.has("settings")) set.add("history");
   if (p.is_admin) set.add("settings");
+  // Everyone gets Settings: without page access to it, it only shows their own
+  // things (look, notifications, password, sign out). See personalSettingsOnly.
+  set.add("settings");
   return [...set];
 }
+const personalSettingsOnly = (p) => !!p && !!p.allowed_tabs && !p.is_admin && !p.allowed_tabs.split(",").includes("settings");
 const mealHasType = (m, t) => (m.meal_type || "").split(",").includes(t);
 
 // The weekly loop, made visible. Vote -> Plan -> Shop is the actual order
@@ -2741,6 +2745,12 @@ async function viewSettings() {
     viewSettings();
   })));
 
+  if (personalSettingsOnly(p)) {
+    // Keep only the personal sections: drop household links and everything after "My password".
+    document.querySelectorAll("#extraLogBtn, #view a[href='#/history']").forEach((n) => n.remove());
+    const pw = document.getElementById("pwForm");
+    while (pw && pw.nextElementSibling) pw.nextElementSibling.remove();
+  }
 }
 
 /* ---------------------------------------------------------------- rewards */
