@@ -2232,9 +2232,14 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("ALTER TABLE store_match ADD COLUMN picked INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
+            # Items searched with no match have no store_match rows; remember them
+            # here too, or "skip already compared" keeps picking the same one.
+            conn.execute("""CREATE TABLE IF NOT EXISTS compare_checked (
+                aldi_sku TEXT, store TEXT, checked_at TEXT, PRIMARY KEY (aldi_sku, store))""")
             src = rows(conn.execute("""SELECT item_key, sku, name, size, price, category, brand FROM price_product
                                        WHERE COALESCE(store,'aldi')='aldi' AND missing=0
-                                       AND (? = 0 OR sku NOT IN (SELECT aldi_sku FROM store_match))
+                                       AND (? = 0 OR (sku NOT IN (SELECT aldi_sku FROM store_match)
+                                                      AND sku NOT IN (SELECT aldi_sku FROM compare_checked WHERE store='morrisons')))
                                        GROUP BY item_key ORDER BY item_key LIMIT ? OFFSET ?""",
                                     (1 if b.get("only_new") else 0, int(b.get("limit", 5)), int(b.get("offset", 0)))))
             out = []
@@ -2266,6 +2271,8 @@ class Handler(SimpleHTTPRequestHandler):
                     continue
                 ranked = sorted(({**c, "score": match_score(a, c)} for c in pool.values()), key=lambda c: -c["score"])[:5]
                 conn.execute("DELETE FROM store_match WHERE aldi_sku=? AND store='morrisons'", (a["sku"],))
+                conn.execute("""INSERT OR REPLACE INTO compare_checked(aldi_sku,store,checked_at)
+                                VALUES (?,'morrisons',datetime('now'))""", (a["sku"],))
                 for i, c in enumerate(ranked):
                     conn.execute("""INSERT INTO store_match(aldi_sku,store,sku,name,size,price,score,rank,checked_at)
                                     VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
