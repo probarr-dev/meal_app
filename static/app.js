@@ -3573,7 +3573,15 @@ async function renderPushCard(p) {
       ${denied ? "" : sub ? `<button id="pushOff" class="ghost">Turn off</button>` : `<button id="pushOn">Turn on</button>`}</div>
     ${sub ? kinds.map(([k, v]) => `<label class="row"><span class="row-label">${esc(v.label)}</span>
       <input type="checkbox" class="pushKind" data-k="${k}" ${st.off.includes(k) ? "" : "checked"}></label>`).join("")
-      + `<div class="add-extra"><button id="pushTest" class="ghost">Send a test</button></div>` : ""}`;
+      + `<div class="add-extra"><button id="pushTest" class="ghost">Send a test</button></div>` : ""}
+    ${isAdmin() ? `<label class="row"><span class="row-label">Voting reminder time<span class="when">for everyone: children who haven't voted after a day get one nudge</span></span>
+      <select id="pushHour"><option value="-1" ${st.reminderHour < 0 ? "selected" : ""}>Off</option>${Array.from({ length: 24 }, (_, h) =>
+        `<option value="${h}" ${st.reminderHour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select></label>` : ""}`;
+  const ph = document.getElementById("pushHour");
+  if (ph) ph.onchange = async () => {
+    try { await api.post("/api/config", { admin_id: p.id, push_reminder_hour: +ph.value }); toast("Reminder time saved.", "good"); }
+    catch (e) { toast(e.message, "bad"); }
+  };
   const on = document.getElementById("pushOn");
   if (on) on.onclick = async () => {
     try {

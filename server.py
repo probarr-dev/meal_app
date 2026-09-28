@@ -1353,7 +1353,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({
                 "enabled": push.AVAILABLE, "key": key,
                 "kinds": push.KINDS,
-                "off": [r["kind"] for r in conn.execute("SELECT kind FROM push_off WHERE person_id=?", (pid,))]})
+                "off": [r["kind"] for r in conn.execute("SELECT kind FROM push_off WHERE person_id=?", (pid,))],
+                "reminderHour": push.reminder_hour(conn)})
 
         if path == "/api/week":
             wid = int(q["id"][0])
@@ -2611,6 +2612,11 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('morrisons_enabled',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              ("1" if int(b["morrisons_enabled"]) else "0",))
+            if "push_reminder_hour" in b:
+                h = int(b["push_reminder_hour"])
+                conn.execute("""INSERT INTO config(key,value) VALUES ('push_reminder_hour',?)
+                                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                             (str(h if 0 <= h <= 23 else -1),))
             if "allow_historic_edits" in b:
                 conn.execute("""INSERT INTO config(key,value) VALUES ('allow_historic_edits',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

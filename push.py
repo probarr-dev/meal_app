@@ -160,9 +160,15 @@ def people(conn, role=None, exclude=None):
     return [r["id"] for r in conn.execute(sql, args)]
 
 
-def reminder_loop(db, hour=18):
-    """Once a day at `hour`: nudge children who haven't voted, once per week,
-    and only after voting has been open for most of a day."""
+def reminder_hour(conn):
+    """Hour (0-23) for the voting reminder; admins set it in Settings. -1 = off."""
+    row = conn.execute("SELECT value FROM config WHERE key='push_reminder_hour'").fetchone()
+    return int(row["value"]) if row else 18
+
+
+def reminder_loop(db):
+    """Once a day at the chosen hour: nudge children who haven't voted, once
+    per week, and only after voting has been open for most of a day."""
     def tick():
         with db() as conn:
             # The week whose "voting is open" went out and still isn't planned.
@@ -189,6 +195,11 @@ def reminder_loop(db, hour=18):
         last = None
         while True:
             now = time.localtime()
+            try:
+                with db() as conn:
+                    hour = reminder_hour(conn)
+            except Exception:
+                hour = 18
             if now.tm_hour == hour and last != now.tm_yday:
                 last = now.tm_yday
                 try:
