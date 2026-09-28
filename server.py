@@ -2593,7 +2593,7 @@ class Handler(SimpleHTTPRequestHandler):
                 (self.me["id"], b["week_id"])))
             subbed = {r["person_id"] for r in conn.execute("SELECT DISTINCT person_id FROM push_sub")}
             push.notify(conn, db, [t["id"] for t in todo], "voting_reminder", "Don't forget to vote 🗳️",
-                        f"{self.me['name']} is waiting on your picks for next week.", "/#/vote")
+                        "Pick the meals you'd like next week.", "/#/vote")
             return self.send_json({"ok": True,
                                    "names": [t["name"] for t in todo if t["id"] in subbed],
                                    "unreachable": [t["name"] for t in todo if t["id"] not in subbed]})
