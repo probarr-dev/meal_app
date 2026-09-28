@@ -100,6 +100,7 @@ def migrate(conn):
         ("person", "emoji", "TEXT"),
         ("extra", "adults_only", "INTEGER DEFAULT 0"),
         ("meal", "no_ingredients", "INTEGER DEFAULT 0"),
+        ("price_product", "store", "TEXT DEFAULT 'aldi'"),
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
@@ -564,6 +565,37 @@ def fmt_qty(amount, unit):
 ALDI_API = "https://api.aldi.co.uk"
 
 
+ALDI_CACHE = {}  # in-memory front of the permanent search_cache table
+
+
+def cache_get(key):
+    if key in ALDI_CACHE:
+        return ALDI_CACHE[key]
+    with db() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS search_cache (k TEXT PRIMARY KEY, v TEXT, fetched_at TEXT)")
+        r = c.execute("SELECT v FROM search_cache WHERE k=?", (key,)).fetchone()
+    if r:
+        ALDI_CACHE[key] = json.loads(r["v"])
+        return ALDI_CACHE[key]
+    return None
+
+
+def cache_put(key, val):
+    ALDI_CACHE[key] = val
+    with db() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS search_cache (k TEXT PRIMARY KEY, v TEXT, fetched_at TEXT)")
+        c.execute("INSERT OR REPLACE INTO search_cache VALUES (?,?,datetime('now'))", (key, json.dumps(val)))
+        c.commit()
+
+
+def cache_clear():
+    ALDI_CACHE.clear()
+    with db() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS search_cache (k TEXT PRIMARY KEY, v TEXT, fetched_at TEXT)")
+        c.execute("DELETE FROM search_cache")
+        c.commit()
+
+
 def aldi_get(path):
     req = urllib.request.Request(ALDI_API + path, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=12) as r:
@@ -575,6 +607,132 @@ def aldi_trim(p):
     return {"sku": p.get("sku"), "name": p.get("name") or "", "brand": p.get("brandName") or "",
             "size": p.get("sellingSize") or "", "price": ((p.get("price") or {}).get("amount") or 0) / 100,
             "category": " › ".join(cats[:2])}
+
+
+def morrisons_enabled(conn):
+    return (conn.execute("SELECT value FROM config WHERE key='morrisons_enabled'").fetchone()
+            or {"value": "0"})["value"] == "1"
+
+
+MORRISONS_LAST = 0.0
+
+
+def morrisons_search(term):
+    """Morrisons renders search results into the page itself; read the
+    embedded product data. Only ever called when Morrisons is switched on."""
+    hit = cache_get("m:" + term.lower())
+    if hit is not None:
+        return hit
+    # Be polite: at most one live Morrisons page every 3 seconds.
+    global MORRISONS_LAST
+    wait = MORRISONS_LAST + 3 - __import__("time").time()
+    if wait > 0:
+        __import__("time").sleep(wait)
+    MORRISONS_LAST = __import__("time").time()
+    req = urllib.request.Request("https://groceries.morrisons.com/search?" + urllib.parse.urlencode({"q": term}),
+                                 headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html", "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        raw = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":  # ~8x smaller download (150KB vs 1.2MB)
+            raw = __import__("gzip").decompress(raw)
+        html = raw.decode("utf-8", "replace")
+    m = re.search(r"window\.__INITIAL_STATE__=(\{.*?\})(?:;|\s*</script>)", html, re.S)
+    ents = json.loads(m.group(1))["data"]["products"]["productEntities"] if m else {}
+    out = []
+    for p in ents.values():
+        try:
+            # Sold weight = the size in the product name (what Aldi quotes); Morrisons' size
+            # field is sometimes drained weight (beetroot "(340g)" vs 215g).
+            nm = re.search(r"(\d+\s*x\s*)?\d+(?:\.\d+)?\s*(?:kg|g|ml|l|cl|pints?)\b\)?\s*$", p.get("name", ""), re.I)
+            out.append({"sku": str(p["retailerProductId"]), "name": p.get("name", ""), "brand": p.get("brand") or "",
+                        "size": nm.group(0).strip(" ()") if nm else (p.get("size") or {}).get("value", ""),
+                        "price": float(((p.get("price") or {}).get("current") or {}).get("amount") or 0),
+                        "category": " › ".join((p.get("categoryPath") or [])[:2]), "store": "morrisons"})
+        except (KeyError, ValueError, TypeError):
+            continue
+    cache_put("m:" + term.lower(), out)
+    return out
+
+
+# ---- store comparison (rough, desktop-only) ----
+STOP = {"morrisons", "aldi", "british", "the", "and", "with", "of", "in", "a", "fresh", "everyday", "essentials",
+        "specially", "selected", "for", "farmers", "pack", "x", "each", "best", "savers", "market", "street",
+        "kg", "g", "ml", "l", "cl", "pint", "pints", "pk", "multipack"}
+
+
+def size_base(size):
+    """'0.5 KG' / '500g' / '2 Pint' / '6 Each' -> (amount in g|ml|each, kind)."""
+    txt = (size or "").lower()
+    mult = 1
+    mp = re.search(r"(\d+)\s*x\s*([\d.]+)", txt)
+    if mp:
+        mult, txt = int(mp.group(1)), txt[mp.start(2):]
+    m = re.search(r"([\d.]+)\s*(kg|g|l|ml|cl|pint|pints|each|pk)?", txt)
+    if not m:
+        return None, None
+    n, u = float(m.group(1)) * mult, (m.group(2) or "each")
+    if u == "kg": return n * 1000, "g"
+    if u == "g": return n, "g"
+    if u == "l": return n * 1000, "ml"
+    if u == "cl": return n * 10, "ml"
+    if u == "ml": return n, "ml"
+    if u in ("pint", "pints"): return n * 568, "ml"
+    return n, "each"
+
+
+def stem(w):
+    """batter/battered, slice/sliced/slices, dipper/dippers -> one word."""
+    for suf in ("ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            w = w[:-len(suf)]
+            break
+    return w[:-1] if w.endswith("e") and len(w) > 3 else w
+
+
+def name_tokens(name):
+    words = re.sub(r"[^a-z ]", " ", (name or "").lower()).split()
+    return {stem(w) for w in words if w not in STOP and len(w) > 1}
+
+
+def match_score(a, b):
+    ta, tb = name_tokens(a["name"]), name_tokens(b["name"])
+    tok = len(ta & tb) / max(1, len(ta | tb))
+    (na, ka), (nb, kb) = size_base(a["size"]), size_base(b["size"])
+    size = 0.0
+    if na and nb and ka == kb:
+        size = min(na, nb) / max(na, nb)
+    ca, cb = name_tokens(a.get("category", "")), name_tokens(b.get("category", ""))
+    cat = len(ca & cb) / max(1, min(len(ca), len(cb))) if ca and cb else 0.5
+    score = 0.6 * tok + 0.25 * size + 0.15 * cat
+    # Own-label vs own-label: Aldi's basics compare with Morrisons' own range,
+    # premium ("Specially Selected") with "The Best"; other brands lose a little.
+    bn, name_b = (b.get("brand") or "").lower(), (b.get("name") or "").lower()
+    premium_a = "specially selected" in (a.get("brand") or "").lower()
+    premium_b = "the best" in name_b
+    if tok >= 0.5:  # only a tie-breaker between genuinely similar products
+        if bn == "morrisons" or name_b.startswith("morrisons"):
+            score += 0.08 if premium_a == premium_b else -0.04
+        else:
+            score -= 0.05
+    # The last real word is usually the product itself ("…sliced BEETROOT"); it must be there.
+    head = [w for w in re.sub(r"[^a-z ]", " ", (a.get("name") or "").lower()).split() if w not in STOP and len(w) > 2]
+    if head and not any(h in tb or h.rstrip("s") in tb for h in {head[-1], head[-1].rstrip("s")}):
+        score -= 0.2
+    return round(max(0, min(1, score)), 3)
+
+
+def match_queries(name):
+    """Several searches per item, most specific first; results get pooled."""
+    words = [w for w in re.sub(r"[^a-z ]", " ", name.lower()).split() if w not in STOP and len(w) > 1]
+    qs = [" ".join(words), " ".join(words[-2:]), " ".join(words[:2])]
+    return [q for i, q in enumerate(qs) if q and q not in qs[:i]]
+
+
+def unit_price(p):
+    n, k = size_base(p.get("size"))
+    if not n or not p.get("price"):
+        return None, None
+    return (round(p["price"] / n * 1000, 2), "kg" if k == "g" else "L") if k in ("g", "ml") else (round(p["price"] / n, 2), "each")
 
 
 def item_key(name):
@@ -982,6 +1140,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "SELECT value FROM config WHERE key='meals_target_default'").fetchone() or {"value": "7"})["value"]),
                 # Days already eaten are history: dimmed, and read-only unless
                 # the household deliberately turns editing back on.
+                "morrisonsEnabled": morrisons_enabled(conn),
                 "allowHistoricEdits": (conn.execute(
                     "SELECT value FROM config WHERE key='allow_historic_edits'").fetchone()
                     or {"value": "0"})["value"] == "1",
@@ -1044,16 +1203,50 @@ class Handler(SimpleHTTPRequestHandler):
             last = conn.execute("SELECT MAX(checked_at) c FROM price_product").fetchone()["c"]
             return self.send_json({"items": out, "lastChecked": last})
 
+        if path == "/api/compare/list":
+            conn.execute("""CREATE TABLE IF NOT EXISTS store_match (
+                aldi_sku TEXT, store TEXT, sku TEXT, name TEXT, size TEXT, price REAL, score REAL,
+                rank INTEGER, checked_at TEXT, picked INTEGER DEFAULT 0, PRIMARY KEY (aldi_sku, store, rank))""")
+            src = rows(conn.execute("""SELECT item_key, sku, name, size, price, category, brand FROM price_product
+                                       WHERE COALESCE(store,'aldi')='aldi' AND missing=0 GROUP BY item_key ORDER BY item_key"""))
+            out = []
+            for a in src:
+                ms = rows(conn.execute("""SELECT sku, name, size, price, score, picked FROM store_match
+                                          WHERE aldi_sku=? AND store='morrisons' ORDER BY rank""", (a["sku"],)))
+                if not ms:
+                    continue
+                if not any(c["picked"] for c in ms):
+                    for c in ms:
+                        c["score"] = match_score(a, {**c, "brand": "Morrisons" if c["name"].lower().startswith("morrisons") else ""})
+                    ms.sort(key=lambda c: -(c["score"] or 0))
+                for c in ms:
+                    c["unit"], c["unitOf"] = unit_price(c)
+                au, auu = unit_price(a)
+                out.append({"item": a["item_key"], "aldi": {**a, "unit": au, "unitOf": auu}, "matches": ms})
+            return self.send_json({"rows": out, "total": len(src)})
+
         if path == "/api/pricing/search":
             term = (q.get("q", [""])[0] or "").strip()
             if not term:
                 return self.send_json({"results": []})
+            if q.get("store", ["aldi"])[0] == "morrisons":
+                if not morrisons_enabled(conn):
+                    return self.send_json({"error": "Morrisons prices are switched off in Settings."}, 403)
+                try:
+                    return self.send_json({"results": morrisons_search(term)[:24]})
+                except Exception:
+                    return self.send_json({"error": "Couldn't reach Morrisons just now."}, 502)
+            hit = cache_get("a:" + term.lower())
+            if hit is not None:
+                return self.send_json({"results": hit})
             try:
                 d = aldi_get("/v3/product-search?" + urllib.parse.urlencode(
                     {"currency": "GBP", "serviceType": "walk-in", "q": term, "page[limit]": 24}))
             except Exception:
                 return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
-            return self.send_json({"results": [aldi_trim(p) for p in d.get("data", [])]})
+            res = [aldi_trim(p) for p in d.get("data", [])]
+            cache_put("a:" + term.lower(), res)
+            return self.send_json({"results": res})
 
         if path == "/api/poll":
             # The new flat weekly poll — one like per person per meal, no
@@ -1806,10 +1999,92 @@ class Handler(SimpleHTTPRequestHandler):
             p = b["product"]
             if not conn.execute("SELECT 1 FROM price_product WHERE item_key=? AND sku=?",
                                 (b["key"], p["sku"])).fetchone():
-                conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,checked_at)
-                                VALUES (?,?,?,?,?,?,?,datetime('now'))""",
+                conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,store,checked_at)
+                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
                              (b["key"], p["sku"], p["name"], p.get("brand", ""), p.get("size", ""),
-                              float(p.get("price") or 0), p.get("category", "")))
+                              float(p.get("price") or 0), p.get("category", ""), p.get("store") or "aldi"))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/compare/run":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Parents only."}, 403)
+            if not morrisons_enabled(conn):
+                return self.send_json({"error": "Switch on Morrisons prices in Settings first."}, 403)
+            conn.execute("""CREATE TABLE IF NOT EXISTS store_match (
+                aldi_sku TEXT, store TEXT, sku TEXT, name TEXT, size TEXT, price REAL, score REAL,
+                rank INTEGER, checked_at TEXT, PRIMARY KEY (aldi_sku, store, rank))""")
+            conn.commit()
+            try:
+                conn.execute("ALTER TABLE store_match ADD COLUMN picked INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            src = rows(conn.execute("""SELECT item_key, sku, name, size, price, category, brand FROM price_product
+                                       WHERE COALESCE(store,'aldi')='aldi' AND missing=0
+                                       AND (? = 0 OR sku NOT IN (SELECT aldi_sku FROM store_match))
+                                       GROUP BY item_key ORDER BY item_key LIMIT ? OFFSET ?""",
+                                    (1 if b.get("only_new") else 0, int(b.get("limit", 5)), int(b.get("offset", 0)))))
+            out = []
+            fresh = bool(b.get("fresh"))
+            for a in src:
+                picked = conn.execute("SELECT 1 FROM store_match WHERE aldi_sku=? AND store='morrisons' AND picked=1",
+                                      (a["sku"],)).fetchone()
+                saved = [] if (fresh and not picked) else rows(conn.execute(
+                    "SELECT sku, name, size, price, score, picked FROM store_match WHERE aldi_sku=? AND store='morrisons' ORDER BY rank",
+                    (a["sku"],)))
+                if saved:
+                    for c in saved:
+                        c["unit"], c["unitOf"] = unit_price(c)
+                    au, auu = unit_price(a)
+                    out.append({"item": a["item_key"], "query": "saved", "aldi": {**a, "unit": au, "unitOf": auu}, "matches": saved})
+                    continue
+                qs = match_queries(a["name"]); q = " | ".join(qs)
+                pool = {}
+                try:
+                    for one in qs:
+                        for c in morrisons_search(one):
+                            pool.setdefault(c["sku"], c)
+                except Exception as e:
+                    blocked = getattr(e, "code", None) in (403, 429)
+                    out.append({"item": a["item_key"], "aldi": a,
+                                "error": "Morrisons is refusing requests for now — try again later" if blocked else "Morrisons didn't answer"})
+                    if blocked:
+                        break
+                    continue
+                ranked = sorted(({**c, "score": match_score(a, c)} for c in pool.values()), key=lambda c: -c["score"])[:5]
+                conn.execute("DELETE FROM store_match WHERE aldi_sku=? AND store='morrisons'", (a["sku"],))
+                for i, c in enumerate(ranked):
+                    conn.execute("""INSERT INTO store_match(aldi_sku,store,sku,name,size,price,score,rank,checked_at)
+                                    VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
+                                 (a["sku"], "morrisons", c["sku"], c["name"], c["size"], c["price"], c["score"], i))
+                conn.commit()
+                au, auu = unit_price(a)
+                for c in ranked:
+                    c["unit"], c["unitOf"] = unit_price(c)
+                out.append({"item": a["item_key"], "query": q, "aldi": {**a, "unit": au, "unitOf": auu}, "matches": ranked})
+            conn.commit()
+            return self.send_json({"rows": out})
+
+        if path == "/api/compare/pick":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Parents only."}, 403)
+            p = b.get("product")
+            if p and not conn.execute("SELECT 1 FROM store_match WHERE aldi_sku=? AND store='morrisons' AND sku=?",
+                                      (b["aldi_sku"], b["sku"])).fetchone():
+                conn.execute("""INSERT INTO store_match(aldi_sku,store,sku,name,size,price,score,rank,checked_at)
+                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
+                             (b["aldi_sku"], "morrisons", b["sku"], p["name"], p.get("size", ""), float(p.get("price") or 0), None, 999))
+            if b.get("query"):  # what a person typed to find it: training data for better matching rules
+                conn.execute("""CREATE TABLE IF NOT EXISTS manual_find (aldi_sku TEXT, store TEXT, query TEXT, sku TEXT,
+                                name TEXT, created_at TEXT DEFAULT (datetime('now')))""")
+                conn.execute("INSERT INTO manual_find(aldi_sku,store,query,sku,name) VALUES (?,?,?,?,?)",
+                             (b["aldi_sku"], "morrisons", b["query"], b["sku"], (p or {}).get("name", "")))
+            ms = rows(conn.execute("SELECT sku FROM store_match WHERE aldi_sku=? AND store='morrisons' ORDER BY rank", (b["aldi_sku"],)))
+            order = [b["sku"]] + [m["sku"] for m in ms if m["sku"] != b["sku"]]
+            conn.execute("UPDATE store_match SET rank=rank+100, picked=0 WHERE aldi_sku=? AND store='morrisons'", (b["aldi_sku"],))
+            for i, sku in enumerate(order):
+                conn.execute("UPDATE store_match SET rank=?, picked=? WHERE aldi_sku=? AND store='morrisons' AND sku=?",
+                             (i, 1 if i == 0 else 0, b["aldi_sku"], sku))
             conn.commit()
             return self.send_json({"ok": True})
 
@@ -1852,8 +2127,24 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True})
 
         if path == "/api/pricing/refresh":
+            cache_clear()
             changed, missing, failed = [], [], 0
-            skus = [r["sku"] for r in rows(conn.execute("SELECT DISTINCT sku FROM price_product"))]
+            skus = [r["sku"] for r in rows(conn.execute(
+                "SELECT DISTINCT sku FROM price_product WHERE COALESCE(store,'aldi')='aldi'"))]
+            if morrisons_enabled(conn):
+                for r in rows(conn.execute("SELECT id, sku, name, price FROM price_product WHERE store='morrisons'")):
+                    try:
+                        hit = next((x for x in morrisons_search(r["name"]) if x["sku"] == r["sku"]), None)
+                    except Exception:
+                        failed += 1
+                        continue
+                    if not hit:
+                        conn.execute("UPDATE price_product SET missing=1, checked_at=datetime('now') WHERE id=?", (r["id"],))
+                        missing.append(r["sku"]); continue
+                    if abs((r["price"] or 0) - hit["price"]) > 0.001:
+                        changed.append({"name": r["name"], "old": r["price"], "new": hit["price"]})
+                    conn.execute("UPDATE price_product SET price=?, size=?, missing=0, checked_at=datetime('now') WHERE id=?",
+                                 (hit["price"], hit["size"], r["id"]))
             for sku in skus:
                 try:
                     d = aldi_get(f"/v2/products/{urllib.parse.quote(sku)}?currency=GBP&serviceType=walk-in")["data"]
@@ -2021,6 +2312,10 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('meals_target_default',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              (str(int(b["meals_target_default"])),))
+            if "morrisons_enabled" in b:
+                conn.execute("""INSERT INTO config(key,value) VALUES ('morrisons_enabled',?)
+                                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                             ("1" if int(b["morrisons_enabled"]) else "0",))
             if "allow_historic_edits" in b:
                 conn.execute("""INSERT INTO config(key,value) VALUES ('allow_historic_edits',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

@@ -24,7 +24,7 @@ const MEAL_TYPES = [
 ];
 const TAB_KEYS = [
   ["plan", "Plan"], ["shopping", "Shopping"], ["extras", "Extras"], ["meals", "Meals"],
-  ["vote", "Vote"], ["rewards", "Rewards"], ["pricing", "Prices"], ["history", "History"], ["settings", "Settings"],
+  ["vote", "Vote"], ["rewards", "Rewards"], ["pricing", "Prices"], ["compare", "Compare"], ["history", "History"], ["settings", "Settings"],
 ];
 // null/unset allowed_tabs = everyone, unchanged from before this feature
 // existed. Admins always keep Settings regardless of what's configured —
@@ -785,6 +785,7 @@ async function boot() {
   S.mealsTargetDefault = b.mealsTargetDefault ?? 7;
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
+  S.morrisonsEnabled = !!b.morrisonsEnabled;
   S.shopDone = !!b.shopDone;
   S.needsSetup = !!b.needsSetup;
   DAYS = WEEKDAY_NAMES.slice(S.weekStartDow).concat(WEEKDAY_NAMES.slice(0, S.weekStartDow));
@@ -829,7 +830,7 @@ function route() {
 
   const view = {
     plan: viewPlan, meals: viewMeals,
-    vote: viewVote, shopping: viewShopping, extras: viewRegulars, pricing: viewPricing,
+    vote: viewVote, shopping: viewShopping, extras: viewRegulars, pricing: viewPricing, compare: viewCompare,
     rewards: viewRewards, history: viewHistory, settings: viewSettings,
   }[tab] || viewPlan;
   updateVoteFab(tab);
@@ -1724,7 +1725,7 @@ async function viewShopping() {
 function addExtraHTML() {
   const aisleOpts = S.aisles.map((a) => `<option ${a === "Household" ? "selected" : ""}>${esc(a)}</option>`).join("");
   return `
-    <input id="exItem" class="big-input" placeholder="What do you need?" list="extraNames" autocomplete="off">
+    <div class="pk-wrap"><input id="exItem" class="big-input" placeholder="What do you need?" autocomplete="off" autocorrect="off" spellcheck="false"></div>
     <datalist id="extraNames"></datalist>
     <div ${isParent() ? "" : "hidden"}>
       <div class="add-sheet-row"><span>How many</span>
@@ -1772,6 +1773,9 @@ function wireAddExtra(onDone, weekId) {
   const exAmt = document.getElementById("exAmt");
   document.getElementById("exMinus").onclick = () => { exAmt.value = Math.max(1, (+exAmt.value || 1) - 1); };
   document.getElementById("exPlus").onclick = () => { exAmt.value = (+exAmt.value || 0) + 1; };
+  attachPicker(exItem, (it) => {
+    if (it.aisle && [...exAisle.options].some((o) => o.value === it.aisle)) exAisle.value = it.aisle;
+  });
   setTimeout(() => exItem.focus(), 50);
   exItem.oninput = () => {
     const key = exItem.value.trim().replace(/\s+/g, " ")
@@ -1795,6 +1799,7 @@ function wireAddExtra(onDone, weekId) {
     const unit = document.getElementById("exUnit").value;
     const aisle = document.getElementById("exAisle").value;
     const recurring = document.getElementById("exRec").checked ? 1 : 0;
+    const aldi = document.getElementById("exItem").dataset.aldi;
 
     if (!isParent()) {
       if (!S.meId) return toast("Pick who you are first (top right).", "bad");
@@ -1814,6 +1819,8 @@ function wireAddExtra(onDone, weekId) {
       week_id: weekId,
     }).catch(() => null);
     if (!added) return toast(OFFLINE_MSG, "bad");
+    S.pickerItems = null;
+    if (aldi) await linkAldi(item, aldi);
     closeModal();
     toast(added.alreadyOnList ? `${item} is already on this list.` : `${item} added.`, added.alreadyOnList ? "bad" : "good");
     onDone();
@@ -2029,7 +2036,7 @@ function mealEditor(meal) {
 
   const ingRow = (i = {}) => `
     <div class="grid-row ing">
-      <input class="i-item" placeholder="Ingredient" value="${esc(i.item || "")}" list="ingNames" autocomplete="off">
+      <input class="i-item" placeholder="Ingredient" value="${esc(i.item || "")}" autocomplete="off" autocorrect="off" spellcheck="false">
       <input class="i-amt" type="number" step="any" placeholder="Qty" value="${i.amount ?? ""}">
       <select class="i-unit">${["g", "ml", "unit", "pack", "tin", "jar", "bottle", "bag", "tub", "loaf"]
         .map((u) => `<option ${u === i.unit ? "selected" : ""}>${u}</option>`).join("")}</select>
@@ -2119,9 +2126,16 @@ function mealEditor(meal) {
   const wire = () => document.querySelectorAll("#modalBody .rm").forEach((b) =>
     (b.onclick = () => { const p = b.parentElement; if (p.parentElement.children.length > 1) p.remove(); }));
   wire();
+  const pickAll = () => document.querySelectorAll("#ings .i-item").forEach((inp) => attachPicker(inp, (it) => {
+    const s = inp.closest(".ing")?.querySelector(".i-aisle");
+    if (it.aisle && s && [...s.options].some((o) => o.value === it.aisle)) s.value = it.aisle;
+  }));
   document.getElementById("addIng").onclick = () => {
-    document.getElementById("ings").appendChild(el(ingRow())); wire();
+    document.getElementById("ings").appendChild(el(ingRow())); wire(); pickAll();
+    document.querySelector("#ings .ing:last-child .i-item")?.focus();
   };
+
+  pickAll();
   document.getElementById("mRecurring").onchange = (e) => {
     document.getElementById("mRecurringForWrap").style.display = e.target.checked ? "" : "none";
   };
@@ -2142,6 +2156,7 @@ function mealEditor(meal) {
     // otherwise wipe out this form's DOM (and any not-yet-read rows) mid-loop.
     const rawIngredients = [...document.querySelectorAll("#ings .ing")].map((r) => ({
       item: r.querySelector(".i-item").value.trim(),
+      aldi: r.querySelector(".i-item").dataset.aldi,
       amount: r.querySelector(".i-amt").value,
       unit: r.querySelector(".i-unit").value,
       aisle: r.querySelector(".i-aisle").value,
@@ -2161,6 +2176,8 @@ function mealEditor(meal) {
       no_ingredients: document.getElementById("mNoIng")?.checked ? 1 : 0,
     });
     if (res.error) return toast(res.error, "bad");
+    S.pickerItems = null;
+    for (const ing of ingredients) if (ing.aldi) await linkAldi(ing.item, ing.aldi);
     closeModal();
     S.meals = [];
     // new/edited ingredients (and their aisles) should show up next time
@@ -2543,6 +2560,9 @@ async function viewSettings() {
         <input id="historicEditsChk" type="checkbox" ${S.allowHistoricEdits ? "checked" : ""}></label>
       <p class="hint">Off by default: days that have already been and gone show as read-only history
         on the Plan. Turn on to correct something after the fact.</p>
+      <label class="field field-check"><span>Morrisons prices (beta)</span>
+        <input id="morrisonsChk" type="checkbox" ${S.morrisonsEnabled ? "checked" : ""}></label>
+      <p class="hint">Adds Morrisons as a second store when linking prices on the Prices page. While off, the app never contacts Morrisons.</p>
     </div>
 
     <h2 class="sec-title">Shopping Stores</h2>
@@ -2782,6 +2802,12 @@ async function viewSettings() {
     await boot(); viewSettings();
   });
 
+  const morrisonsChk = document.getElementById("morrisonsChk");
+  if (morrisonsChk) morrisonsChk.onchange = busy(morrisonsChk, async (e) => {
+    const res = await api.post("/api/config", { morrisons_enabled: e.target.checked ? 1 : 0, admin_id: p.id });
+    if (res.error) return toast(res.error, "bad");
+    await boot(); viewSettings();
+  });
   const historicEditsChk = document.getElementById("historicEditsChk");
   if (historicEditsChk) historicEditsChk.onchange = busy(historicEditsChk, async (e) => {
     const res = await api.post("/api/config", {
@@ -3120,7 +3146,7 @@ setInterval(async () => {
     const el = document.activeElement;
     const busyTyping = el && /INPUT|TEXTAREA|SELECT/.test(el.tagName);
     const modalOpen = !document.getElementById("modal")?.classList.contains("hidden");
-    if (!busyTyping && !modalOpen && !document.querySelector("dialog[open], .confirm-dialog")) {
+    if (!busyTyping && !modalOpen && !S.pauseSync && !document.querySelector("dialog[open], .confirm-dialog")) {
       liveV = v;
       if (typeof S !== "undefined" && S.meId && location.hash !== "") {
         const y = scroller().scrollTop;
@@ -3153,8 +3179,9 @@ async function viewPricing() {
     <header class="block-head"><h1>Prices</h1>
       <span class="week-range">${linked} of ${items.length} items priced</span>
       <div class="actions"><button id="priceRefresh" class="primary">↻ Refresh prices</button></div></header>
-    <p class="subtitle">Aldi prices${lastChecked ? `, last checked ${esc(new Date(lastChecked.replace(" ", "T") + "Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}` : ""}. Link more than one product to get a price range.</p>
+    <p class="subtitle">${S.morrisonsEnabled ? "Aldi and Morrisons" : "Aldi"} prices${lastChecked ? `, last checked ${esc(new Date(lastChecked.replace(" ", "T") + "Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}` : ""}. Link more than one product to get a price range.</p>
     ${dupesHTML(items)}
+    ${S.morrisonsEnabled ? `<a href="#/compare" class="notice small desktop-only" style="display:block;text-decoration:none;color:var(--text)">🔬 <strong>Compare with Morrisons</strong> — matches and prices →</a>` : ""}
     <div class="pricing-bar">
       <input id="priceQ" placeholder="Search items…" value="${esc(f.q)}">
       <select id="priceShow">${[["all", "All items"], ["unlinked", "Not priced yet"], ["linked", "Priced"]]
@@ -3166,7 +3193,7 @@ async function viewPricing() {
         <td class="pt-item"><button class="itemEdit link-btn" data-key="${esc(i.key)}" title="Quantities per meal, or merge">${esc(i.key)} ✏️</button></td>
         <td class="pt-meals">${esc(i.meals.join(", "))}</td>
         <td>${i.products.map((p) => `<span class="price-chip ${p.missing ? "missing" : ""}" title="${esc(p.category)}">
-            ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
+            <span class="store-badge ${esc(p.store || "aldi")}">${(p.store || "aldi") === "morrisons" ? "M" : "A"}</span> ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
             <button class="unlinkBtn" data-id="${p.id}" aria-label="Remove">✕</button></span>`).join("") || `<span class="hint" style="display:inline">—</span>`}</td>
         <td class="pt-range">${i.low != null ? money(i.low) + (i.high > i.low ? `–${money(i.high)}` : "") : ""}</td>
         <td><button class="linkBtn ghost" data-key="${esc(i.key)}">＋ Link</button></td>
@@ -3208,14 +3235,16 @@ async function viewPricing() {
 }
 
 function priceLinker(key) {
-  openModal(`Link Aldi products — ${key}`, `
+  let store = "aldi";
+  openModal(`Link products — ${key}`, `
+    ${S.morrisonsEnabled ? `<div class="store-tabs"><button class="storeTab on" data-s="aldi">Aldi</button><button class="storeTab" data-s="morrisons">Morrisons</button></div>` : ""}
     <div class="pricing-bar"><input id="aldiQ" value="${esc(key)}"><button id="aldiGo" class="primary">Search</button></div>
     <div id="aldiResults" class="aldi-results"><p class="hint">Searching…</p></div>`);
   const added = new Set();
   const run = async () => {
     const box = document.getElementById("aldiResults");
     box.innerHTML = `<p class="hint">Searching…</p>`;
-    const r = await api.get(`/api/pricing/search?q=${encodeURIComponent(document.getElementById("aldiQ").value)}`).catch(() => null);
+    const r = await api.get(`/api/pricing/search?q=${encodeURIComponent(document.getElementById("aldiQ").value)}${store === "morrisons" ? "&store=morrisons" : ""}`).catch(() => null);
     if (!r || r.error) { box.innerHTML = `<p class="danger-text">${esc(r?.error || OFFLINE_MSG)}</p>`; return; }
     box.innerHTML = r.results.map((p, n) => `<div class="aldi-row">
         <span><strong>${esc(p.name)}</strong> <span class="hint" style="display:inline">${esc(p.brand)} · ${esc(p.size)} · ${esc(p.category)}</span></span>
@@ -3230,6 +3259,11 @@ function priceLinker(key) {
     })));
   };
   document.getElementById("aldiGo").onclick = run;
+  document.querySelectorAll(".storeTab").forEach((t) => (t.onclick = () => {
+    store = t.dataset.s;
+    document.querySelectorAll(".storeTab").forEach((x) => x.classList.toggle("on", x === t));
+    run();
+  }));
   document.getElementById("aldiQ").onkeydown = (e) => { if (e.key === "Enter") run(); };
   run();
   const obs = new MutationObserver(() => {
@@ -3341,4 +3375,249 @@ function itemEditor(item, items) {
     if (r.error) return toast(r.error, "bad");
     closeModal(); toast(`Combined into “${to}”.`, "good"); S.meals = []; viewPricing();
   });
+}
+
+/* ------------------------------------------------ shared item picker ---- */
+// One dropdown for every "type an item" box: your existing items first (stops
+// duplicates), then Aldi products underneath (priced). Our own list, not the
+// browser's <datalist>, because iPhone shows that as keyboard suggestions.
+const itemKey = (s) => s.trim().split(/\s+/).join(" ").toLowerCase().replace(/(^|[^a-z'])([a-z])/g, (m, p, c) => p + c.toUpperCase());
+const ALDI_AISLE = { "Fresh Food": "Fresh Produce", "Chilled Food": "Dairy & Chilled", "Frozen Food": "Frozen",
+  "Food Cupboard": "Cupboard", "Bakery": "Bakery", "Home Essentials": "Household", "Drinks": "Drinks" };
+async function linkAldi(name, json) {
+  S.pickerItems = null;
+  if (!isParent()) return;
+  try { await api.post("/api/pricing/link", { actor_id: S.meId, key: itemKey(name), product: JSON.parse(json) }); } catch { /* price can be linked later on Prices */ }
+}
+async function pickerData() {
+  if (!S.pickerItems) {
+    const [{ names = [], aisleFor = {} }, pr] = await Promise.all([
+      api.get("/api/ingredient-names"), api.get("/api/pricing/items").catch(() => ({ items: [] }))]);
+    const range = {}; (pr.items || []).forEach((i) => { if (i.low != null) range[i.key] = [i.low, i.high]; });
+    S.pickerItems = [...new Set(names.concat((pr.items || []).map((i) => i.key)))].map((n) => ({ name: n, aisle: aisleFor[itemKey(n)] || aisleFor[n], range: range[itemKey(n)] }));
+  }
+  return S.pickerItems;
+}
+function attachPicker(input, onPick) {
+  if (input.dataset.picker) return;
+  input.dataset.picker = "1";
+  const pop = document.createElement("div"); pop.className = "picker-pop"; pop.hidden = true;
+  input.insertAdjacentElement("afterend", pop);
+  let timer = null, seq = 0;
+  const money = (r) => r ? ` <span class="pk-price">£${r[0].toFixed(2)}${r[1] > r[0] ? `–${r[1].toFixed(2)}` : ""}</span>` : "";
+  const render = async () => {
+    const q = input.value.trim().toLowerCase(); const mine = ++seq;
+    if (q.length < 2) { pop.hidden = true; return; }
+    const own = (await pickerData()).filter((i) => i.name.toLowerCase().includes(q)).slice(0, 6);
+    const draw = (aldi) => {
+      if (mine !== seq) return;
+      pop.innerHTML = (own.length ? `<div class="pk-head">Your items</div>` + own.map((i, n) =>
+        `<button type="button" class="pk-row" data-own="${n}">${esc(i.name)}${money(i.range)}</button>`).join("") : "")
+        + (aldi === null ? `<div class="pk-head">From Aldi…</div>` : aldi.length ? `<div class="pk-head">From Aldi</div>` + aldi.map((p, n) =>
+          `<button type="button" class="pk-row" data-aldi="${n}">${esc(p.name)} <span class="pk-sub">${esc(p.size)}</span> <span class="pk-price">£${p.price.toFixed(2)}</span></button>`).join("") : "");
+      pop.hidden = !pop.innerHTML;
+      pop.querySelectorAll(".pk-row").forEach((b) => (b.onpointerdown = (e) => e.preventDefault()));
+      pop.querySelectorAll("[data-own]").forEach((b) => (b.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation(); const it = own[+b.dataset.own];
+        input.value = it.name; delete input.dataset.aldi; pop.hidden = true; onPick?.(it);
+      }));
+      pop.querySelectorAll("[data-aldi]").forEach((b) => (b.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation(); const p = aldi[+b.dataset.aldi];
+        const exists = S.pickerItems?.find((i) => i.name.toLowerCase() === p.name.toLowerCase());
+        input.value = exists ? exists.name : p.name; input.dataset.aldi = JSON.stringify(p); pop.hidden = true;
+        onPick?.({ name: input.value, aisle: ALDI_AISLE[(p.category || "").split(" › ")[0]] });
+        input.focus(); input.setSelectionRange(0, input.value.length);
+      }));
+    };
+    draw(q.length >= 3 ? null : []);
+    if (q.length >= 3) {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const r = await api.get(`/api/pricing/search?q=${encodeURIComponent(q)}`).catch(() => null);
+        draw(r && !r.error ? r.results.slice(0, 6) : []);
+      }, 400);
+    }
+  };
+  input.addEventListener("input", () => { delete input.dataset.aldi; render(); });
+  input.addEventListener("focus", render);
+  input.addEventListener("blur", () => setTimeout(() => { pop.hidden = true; }, 300));
+}
+
+function manualFind(aldiSku, item, done) {
+  openModal(`Find “${item}” at Morrisons`, `
+    <div class="pricing-bar"><input id="mfQ" value="${esc(item)}"><button id="mfGo" class="primary">Search</button></div>
+    <p class="hint">Search however you would on the Morrisons site — the words you use are saved to help the automatic matching learn.</p>
+    <div id="mfOut" class="aldi-results"></div>`);
+  const go = async () => {
+    const q = document.getElementById("mfQ").value.trim(), out = document.getElementById("mfOut");
+    if (!q) return;
+    out.innerHTML = `<p class="hint">Searching Morrisons…</p>`;
+    const r = await api.get(`/api/pricing/search?store=morrisons&q=${encodeURIComponent(q)}`).catch((e) => ({ error: e.message }));
+    if (r.error) { out.innerHTML = `<p class="danger-text">${esc(r.error)}</p>`; return; }
+    out.innerHTML = r.results.map((p, n) => `<div class="aldi-row"><span><strong>${esc(p.name)}</strong> <span class="hint" style="display:inline">${esc(p.size)} · ${esc(p.category)}</span></span>
+      <span class="aldi-price">£${p.price.toFixed(2)}</span><button class="mfPick primary" data-n="${n}">This one</button></div>`).join("") || `<p class="hint">Nothing found — try fewer words.</p>`;
+    out.querySelectorAll(".mfPick").forEach((b) => (b.onclick = busy(b, async () => {
+      const p = r.results[+b.dataset.n];
+      const res = await api.post("/api/compare/pick", { actor_id: S.meId, aldi_sku: aldiSku, sku: p.sku, product: p, query: q });
+      if (res.error) return toast(res.error, "bad");
+      closeModal(); toast("Saved as the Morrisons match.", "good"); done?.();
+    })));
+  };
+  document.getElementById("mfGo").onclick = go;
+  document.getElementById("mfQ").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+
+/* ---------------------------------------------------------------- compare */
+// Desktop page: every saved Aldi→Morrisons match, always loaded from the
+// database. Running a comparison adds new matches; nothing disappears on reload.
+async function viewCompare() {
+  const view = document.getElementById("view");
+  if (!isParent()) { view.innerHTML = `<p class="empty">Compare is for parents.</p>`; return; }
+  if (!S.morrisonsEnabled) {
+    view.innerHTML = `<header class="block-head"><h1>Compare</h1></header>
+      <p class="notice small">Switch on <strong>Morrisons prices (beta)</strong> in Settings → Household to compare stores.</p>`;
+    return;
+  }
+  const { rows: raw, total } = await api.get("/api/compare/list");
+  raw.forEach((x) => { x.best = sameAmount(x.aldi, x.matches); x.score = x.matches[0].picked ? 1 : (x.matches[0].score ?? 1); });
+  let sortBy = "az"; try { sortBy = localStorage.getItem("mealplan-compare-sort") || "az"; } catch { /* ignore */ }
+  const absd = (x) => (x.best ? Math.abs(x.best.diff) : -1);
+  const SORTS = {
+    az: [(x, y) => x.item.localeCompare(y.item), "A–Z (default)"],
+    wrong: [(x, y) => absd(y) * (1.2 - y.score) - absd(x) * (1.2 - x.score), "Most likely wrong first"],
+    score: [(x, y) => x.score - y.score, "Lowest score first"],
+    diff: [(x, y) => absd(y) - absd(x), "Biggest price difference first"],
+  };
+  const saved = [...raw].sort((SORTS[sortBy] || SORTS.az)[0]);
+  const comp = raw.filter((x) => x.best);
+  const tot = comp.reduce((s, x) => s + x.best.diff, 0);
+  const aldiTot = comp.reduce((s, x) => s + x.aldi.price, 0), morTot = comp.reduce((s, x) => s + x.best.cost, 0);
+  const aldiWins = comp.filter((x) => x.best.diff > 0.05).length, morWins = comp.filter((x) => x.best.diff < -0.05).length;
+  const up = (u, of) => (u == null ? "" : `£${u.toFixed(2)}/${of}`);
+  const pickedN = saved.filter((x) => x.matches[0]?.picked).length;
+  view.innerHTML = `
+    <header class="block-head"><h1>Compare</h1>
+      <span class="week-range">${saved.length} of ${total} items matched · ${pickedN} checked by hand</span></header>
+    <div class="card pad compare-card">
+      <div class="pricing-bar" style="max-width:440px"><input id="compareN" type="number" min="1" max="30" value="5">
+        <button id="compareRun" class="primary">Compare more</button></div>
+      <label class="inline"><input type="checkbox" id="compareNew" checked> Only items not compared yet</label>
+      <label class="inline"><input type="checkbox" id="compareFresh"> Re-match from scratch</label>
+      <div id="compareOut"></div>
+    </div>
+    ${comp.length ? `<div class="notice compare-total">Across <strong>${comp.length}</strong> comparable items, the same shop costs
+      <strong>${tot >= 0 ? `£${tot.toFixed(2)} more at Morrisons` : `£${(-tot).toFixed(2)} more at Aldi`}</strong>
+      <span class="hint" style="display:inline">· Aldi cheaper on ${aldiWins}, Morrisons cheaper on ${morWins}, ${comp.length - aldiWins - morWins} about the same</span></div>` : ""}
+    <div class="pricing-bar" style="max-width:360px"><label class="inline">Sort <select id="compareSort">${Object.entries(SORTS).map(([k, [, l]]) =>
+      `<option value="${k}" ${k === sortBy ? "selected" : ""}>${l}</option>`).join("")}</select></label></div>
+    <div class="card pricing-table-wrap"><table class="pricing-table">
+      <tr><th>Item</th><th>Aldi${comp.length ? ` <span class="hint" style="display:inline">£${aldiTot.toFixed(2)}</span>${tot < 0 ? ` <span class="danger-text">(+£${(-tot).toFixed(2)})</span>` : ""}` : ""}</th>
+        <th>Morrisons${comp.length ? ` <span class="hint" style="display:inline">£${morTot.toFixed(2)}</span>${tot > 0 ? ` <span class="danger-text">(+£${tot.toFixed(2)})</span>` : ""}` : ""}</th><th>Score</th><th>Compared</th></tr>
+      ${saved.map((x) => { const m = x.matches[0]; const a = x.aldi;
+        const cheaper = m && m.unit != null && a.unit != null && m.unit !== a.unit ? (m.unit < a.unit ? "Morrisons" : "Aldi") : "";
+        return `<tr><td class="pt-item">${esc(x.item)}</td>
+          <td>${esc(a.name)} <span class="hint" style="display:inline">${esc(a.size)}</span> <strong>£${a.price.toFixed(2)}</strong></td>
+          <td>${esc(dropSize(m.name, soldSize(m)))} <span class="hint" style="display:inline">${esc(soldSize(m) || "")}</span> <strong>£${(m.price || 0).toFixed(2)}</strong>
+            ${m.picked ? ` <span class="good-text">✓ picked</span>` : `<button class="cmpGood link-btn" data-a="${esc(a.sku)}" data-s="${esc(m.sku)}" data-score="${m.score ?? ""}">👍 good match</button>`}
+            <button class="cmpFind link-btn" data-a="${esc(a.sku)}" data-item="${esc(x.item)}">🔍 find it myself</button>
+            ${x.matches.slice(1, 3).map((o) => `<div class="hint alt-row">${o.score ?? "–"} · ${esc(dropSize(o.name, o.size))} ${esc(o.size || "")} £${(o.price || 0).toFixed(2)}
+              <button class="cmpPick link-btn" data-a="${esc(a.sku)}" data-s="${esc(o.sku)}">use this</button></div>`).join("")}</td>
+          <td>${m.picked ? `<span class="good-text">✓</span>` : m.score == null ? "" : `<span class="${m.score >= 0.8 ? "good-text" : m.score >= 0.6 ? "" : "danger-text"}">${m.score.toFixed(2)}</span>`}</td>
+          <td>${sameAmountVerdict(a, x.matches)}</td></tr>`; }).join("") || `<tr><td colspan="5" class="empty">Nothing compared yet — press Compare more.</td></tr>`}
+    </table></div>`;
+
+  document.getElementById("compareSort").onchange = (e) => { try { localStorage.setItem("mealplan-compare-sort", e.target.value); } catch { /* ignore */ } viewCompare(); };
+  document.querySelectorAll(".cmpFind").forEach((f) => (f.onclick = () => manualFind(f.dataset.a, f.dataset.item, viewCompare)));
+  document.querySelectorAll(".cmpGood").forEach((g) => (g.onclick = busy(g, async () => {
+    const res = await api.post("/api/compare/pick", { actor_id: S.meId, aldi_sku: g.dataset.a, sku: g.dataset.s,
+      query: `(confirmed auto match, score ${g.dataset.score})` });
+    if (res.error) return toast(res.error, "bad");
+    viewCompare();
+  })));
+  document.querySelectorAll(".cmpPick").forEach((p) => (p.onclick = busy(p, async () => {
+    const res = await api.post("/api/compare/pick", { actor_id: S.meId, aldi_sku: p.dataset.a, sku: p.dataset.s });
+    if (res.error) return toast(res.error, "bad");
+    viewCompare();
+  })));
+  const cmp = document.getElementById("compareRun");
+  cmp.onclick = busy(cmp, async () => {
+    const box = document.getElementById("compareOut");
+    const n = +document.getElementById("compareN").value || 5;
+    const fresh = document.getElementById("compareFresh").checked ? 1 : 0;
+    const onlyNew = document.getElementById("compareNew").checked ? 1 : 0;
+    let done = 0, last = "";
+    S.pauseSync = true;  // our own saves would otherwise redraw the page and wipe the progress bar
+    try {
+    for (let k = 0; k < n; k++) {
+      box.innerHTML = `<div class="cmp-progress"><div class="cmp-bar" style="width:${Math.round(k / n * 100)}%"></div></div>
+        <p class="hint">Comparing ${k + 1} of ${n}${last ? ` — last: ${esc(last)}` : ""}…</p>`;
+      const one = await api.post("/api/compare/run", { actor_id: S.meId, limit: 1, offset: onlyNew ? 0 : k, fresh, only_new: onlyNew }).catch((e) => ({ error: e.message }));
+      if (one.error) { box.innerHTML = `<p class="danger-text">${esc(one.error)}</p>`; return; }
+      if (!one.rows.length) break;
+      done++; last = one.rows[0].item;
+      const err = one.rows.find((x) => x.error);
+      if (err && /refusing/.test(err.error)) { toast(err.error, "bad"); break; }
+    }
+    } finally { S.pauseSync = false; }
+    toast(done ? `Compared ${done} item${done === 1 ? "" : "s"}.` : "Nothing new to compare.", "good");
+    viewCompare();
+  });
+}
+
+// "Morrisons 1.5× more (+£0.45)": same amount as the Aldi pack, per-unit prices.
+function priceVerdict(a, m) {
+  if (a.unit == null || m.unit == null || !a.unit || a.unitOf !== m.unitOf) return `<span class="hint">can't compare sizes</span>`;
+  const r = m.unit / a.unit, diff = (m.unit - a.unit) * (a.price / a.unit);
+  if (Math.abs(r - 1) < 0.03) return "About the same";
+  const who = r > 1 ? "Morrisons" : "Aldi", x = r > 1 ? r : 1 / r;
+  return `<strong>${who}</strong> ${x.toFixed(1)}× more <span class="hint" style="display:inline">(+£${Math.abs(diff).toFixed(2)})</span>`;
+}
+
+// Morrisons repeats the size in the name ("BBQ Sauce 450g" + "450g"); show it once.
+function dropSize(name, size) {
+  if (!size) return name;
+  const esc2 = size.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+  return name.replace(new RegExp(`\\s*\\(?${esc2}\\)?\\s*$`, "i"), "").trim() || name;
+}
+// "1kg" / "0.5 KG" / "4 x 220g" / "2 Pint" / "6 Each" -> [amount in g|ml|each, kind]
+// Prefer the sold weight written in the name over a separate size field.
+function soldSize(m) {
+  const hit = String(m.name || "").match(/(\d+\s*x\s*)?\d+(?:\.\d+)?\s*(?:kg|g|ml|l|cl|pints?)\b\)?\s*$/i);
+  return hit ? hit[0].replace(/[()]/g, "").trim() : m.size;
+}
+function sizeBase(size) {
+  let t = String(size || "").toLowerCase(), mult = 1;
+  const mp = t.match(/(\d+)\s*x\s*([\d.]+)/); if (mp) { mult = +mp[1]; t = t.slice(t.indexOf(mp[2])); }
+  const m = t.match(/([\d.]+)\s*(kg|g|l|ml|cl|pints?|each|pk)?/); if (!m) return [null, null];
+  const n = +m[1] * mult, u = m[2] || "each";
+  return u === "kg" ? [n * 1000, "g"] : u === "g" ? [n, "g"] : u === "l" ? [n * 1000, "ml"] : u === "cl" ? [n * 10, "ml"]
+    : u === "ml" ? [n, "ml"] : /pint/.test(u) ? [n * 568, "ml"] : [n, "each"];
+}
+// Rule: buy roughly what you'd buy at Aldi — never under 90%, never over 150% —
+// using whole packs of one product; cheapest way in that band wins.
+const BAND = [0.9, 1.5];
+function sameAmount(a, matches) {
+  const [ref, kind] = sizeBase(a.size);
+  if (!ref) return null;
+  // The match on show always counts (it's the one you're looking at); other
+  // runners-up only if they're a decent match.
+  const pool = matches.some((m) => m.picked) ? matches.filter((m) => m.picked)
+    : matches.filter((m, i) => i === 0 || (m.score ?? 1) >= 0.6);
+  let best = null;
+  for (const m of pool) {
+    const [sz, k] = sizeBase(soldSize(m)); if (!sz || k !== kind) continue;
+    const packs = Math.max(1, Math.round(ref / sz)), got = packs * sz;
+    if (got / ref < BAND[0] || got / ref > BAND[1]) continue;
+    const cost = packs * m.price;
+    if (!best || cost < best.cost) best = { m, packs, cost };
+  }
+  return best ? { ...best, diff: best.cost - a.price } : null;
+}
+function sameAmountVerdict(a, matches) {
+  if (!sizeBase(a.size)[0]) return `<span class="hint">no size on the Aldi item</span>`;
+  const best = sameAmount(a, matches);
+  if (!best) return `<span class="hint">no similar size at Morrisons</span>`;
+  const diff = best.diff, how = best.packs > 1 ? ` <span class="hint" style="display:inline">(${best.packs} × ${esc(best.m.size)})</span>` : "";
+  if (Math.abs(diff) < 0.05) return `About the same${how}`;
+  return `<strong>${diff > 0 ? "Morrisons" : "Aldi"}</strong> +£${Math.abs(diff).toFixed(2)} for the same amount${how}`;
 }
