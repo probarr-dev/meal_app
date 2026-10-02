@@ -1078,6 +1078,17 @@ def build_week(conn, week_id, viewer_id=None):
 
 # ---------------------------------------------------------------- http
 
+def extras_need_push(conn):
+    """Household setting: children must have notifications on before asking for extras."""
+    row = conn.execute("SELECT value FROM config WHERE key='extras_need_push'").fetchone()
+    return bool(row and row["value"] == "1")
+
+
+def extras_blocked(conn, me):
+    return (me["role"] != "parent" and push.AVAILABLE and extras_need_push(conn)
+            and not conn.execute("SELECT 1 FROM push_sub WHERE person_id=?", (me["id"],)).fetchone())
+
+
 def notify_extra_ask(conn, person_id, item, request_id):
     """Tell the parents when a child asks for something (parents' own adds are silent).
     Each request gets its own notification (unique tag) with Approve / Say no buttons."""
@@ -1363,6 +1374,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # the household deliberately turns editing back on.
                 "morrisonsEnabled": morrisons_enabled(conn),
                 "vetoesPerPerson": vetoes_allowed(conn),
+                "extrasNeedPush": extras_need_push(conn),
                 "allowHistoricEdits": (conn.execute(
                     "SELECT value FROM config WHERE key='allow_historic_edits'").fetchone()
                     or {"value": "0"})["value"] == "1",
@@ -1535,8 +1547,14 @@ class Handler(SimpleHTTPRequestHandler):
             default_target = int((conn.execute(
                 "SELECT value FROM config WHERE key='meals_target_default'").fetchone() or {"value": "7"})["value"])
             target = (wk["meals_target"] if wk and wk["meals_target"] else default_target)
+            subbed = {r[0] for r in conn.execute("SELECT DISTINCT person_id FROM push_sub")}
+            # Per person: picks used this week and whether they can be notified (parents' remind list).
+            picks = [{"id": r["id"], "name": r["name"], "used": r["used"], "notifiable": r["id"] in subbed}
+                     for r in conn.execute("""SELECT p.id, p.name, (SELECT COUNT(*) FROM meal_vote v
+                                              WHERE v.week_id=? AND v.person_id=p.id) AS used
+                                              FROM person p WHERE p.is_placeholder=0 ORDER BY p.id""", (wid,))]
             return self.send_json({"tally": tally, "my_veto": my_veto, "my_vetoes": my_vetoes,
-                                   "vetoes_allowed": vetoes_allowed(conn), "target": target})
+                                   "vetoes_allowed": vetoes_allowed(conn), "target": target, "picks": picks})
 
         if path == "/api/week/pool":
             # Meals finalized onto this week's shortlist but not yet assigned
@@ -1653,7 +1671,12 @@ class Handler(SimpleHTTPRequestHandler):
                 JOIN person p ON p.id = er.person_id
                 WHERE er.week_id=? AND er.status='pending'
                 ORDER BY er.requested_at""", (wid,))) if wid else []
-            return self.send_json({"extras": extras, "requests": requests_})
+            kids = [dict(r) for r in conn.execute("""SELECT p.id, p.name, EXISTS(SELECT 1 FROM push_sub s
+                    WHERE s.person_id=p.id) AS notifiable FROM person p
+                    WHERE p.is_placeholder=0 AND p.role!='parent' ORDER BY p.id""")]
+            my_devices = conn.execute("SELECT COUNT(*) FROM push_sub WHERE person_id=?", (self.me["id"],)).fetchone()[0]
+            return self.send_json({"extras": extras, "requests": requests_, "kids": kids, "myDevices": my_devices,
+                                   "needPush": extras_need_push(conn)})
 
         if path == "/api/stores":
             return self.send_json({"stores": rows(conn.execute(
@@ -2145,6 +2168,8 @@ class Handler(SimpleHTTPRequestHandler):
                                                     and not int(b.get("recurring", 0))})
 
         if path == "/api/extra-request":
+            if extras_blocked(conn, self.me):
+                return self.send_json({"error": "Turn on notifications first (Settings → Notifications)."}, 403)
             # Anyone can ask — kids included. It never touches the real
             # shopping list on its own; a parent has to approve it first.
             item = (b.get("item") or "").strip()
@@ -2480,6 +2505,8 @@ class Handler(SimpleHTTPRequestHandler):
                                    "missing": [names.get(s, s) for s in missing], "failed": failed})
 
         if path == "/api/extra-request/set":
+            if extras_blocked(conn, self.me):
+                return self.send_json({"error": "Turn on notifications first (Settings → Notifications)."}, 403)
             # Kids use the same +/- as parents, but it only ever changes their
             # own pending request (max 3) — a parent still approves it.
             ex = conn.execute("SELECT * FROM extra WHERE id=?", (b["extra_id"],)).fetchone()
@@ -2631,19 +2658,35 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True})
 
         if path == "/api/push/remind":
-            # A parent's "nudge now": everyone (but them) with no vote in that week yet.
+            # A parent's "nudge now": one person (target_id), or everyone (but them)
+            # with no vote in that week yet.
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Only a parent can do that."}, 403)
-            todo = rows(conn.execute("""
-                SELECT p.id, p.name FROM person p WHERE p.is_placeholder=0 AND p.id!=?
-                AND NOT EXISTS (SELECT 1 FROM meal_vote v WHERE v.week_id=? AND v.person_id=p.id)""",
-                (self.me["id"], b["week_id"])))
+            if b.get("target_id"):
+                todo = rows(conn.execute("SELECT id, name FROM person WHERE id=?", (int(b["target_id"]),)))
+            else:
+                todo = rows(conn.execute("""
+                    SELECT p.id, p.name FROM person p WHERE p.is_placeholder=0 AND p.id!=?
+                    AND NOT EXISTS (SELECT 1 FROM meal_vote v WHERE v.week_id=? AND v.person_id=p.id)""",
+                    (self.me["id"], b["week_id"])))
             subbed = {r["person_id"] for r in conn.execute("SELECT DISTINCT person_id FROM push_sub")}
             push.notify(conn, db, [t["id"] for t in todo], "voting_reminder", "Don't forget to vote 🗳️",
                         "Pick the meals you'd like next week.", "/#/vote")
             return self.send_json({"ok": True,
                                    "names": [t["name"] for t in todo if t["id"] in subbed],
                                    "unreachable": [t["name"] for t in todo if t["id"] not in subbed]})
+
+        if path == "/api/push/nudge-extras":
+            # "Anything you want from the shop?" Parents can press it as often as they like;
+            # not a kind anyone can switch off, so it always gets through.
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            tid = int(b["target_id"])
+            who = conn.execute("SELECT name FROM person WHERE id=?", (tid,)).fetchone()
+            n = push.notify(conn, db, [tid], "extras_nudge", "Anything you want from the shop? 🛒",
+                            "Add your extras now so they're on the list.", "/#/extras",
+                            extra={"tag": f"extras_nudge-{int(__import__('time').time())}"})
+            return self.send_json({"ok": True, "name": who["name"] if who else "", "devices": n})
 
         if path == "/api/push/test":
             n = push.notify(conn, db, [b["person_id"]], "test", "It works 🎉",
@@ -2679,6 +2722,10 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('push_reminder_hour',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              (str(h if 0 <= h <= 23 else -1),))
+            if "extras_need_push" in b:
+                conn.execute("""INSERT INTO config(key,value) VALUES ('extras_need_push',?)
+                                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                             ("1" if int(b["extras_need_push"]) else "0",))
             if "allow_historic_edits" in b:
                 conn.execute("""INSERT INTO config(key,value) VALUES ('allow_historic_edits',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

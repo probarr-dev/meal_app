@@ -643,6 +643,7 @@ async function boot() {
   S.mealsTargetDefault = b.mealsTargetDefault ?? 7;
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
+  S.extrasNeedPush = !!b.extrasNeedPush;
   S.morrisonsEnabled = !!b.morrisonsEnabled;
   S.vetoesPerPerson = b.vetoesPerPerson ?? 1;
   S.shopDone = !!b.shopDone;
@@ -1700,7 +1701,19 @@ async function viewRegulars() {
   // Always the next shop you'll do: this week's until it's marked done.
   const weekId = shopWeekId;
   const parent = isParent();
-  let { extras, requests = [] } = await api.get(`/api/extras?week_id=${weekId}`);
+  let { extras, requests = [], kids = [], myDevices = 0, needPush = false } = await api.get(`/api/extras?week_id=${weekId}`);
+  if (!parent && needPush && !myDevices) {
+    document.getElementById("view").innerHTML = `
+      <header class="block-head"><h1>Extras</h1></header>
+      <div class="card pad" style="text-align:center">
+        <p style="font-size:1.1rem;margin:6px 0 4px">🔔 Turn on notifications to ask for extras</p>
+        <p class="hint">Then Mum and Dad can remind you before they go shopping.</p>
+        <button id="extrasPushOn" class="primary" style="margin-top:10px">Turn on notifications</button>
+      </div>`;
+    const eb = document.getElementById("extrasPushOn");
+    eb.onclick = busy(eb, async () => { if (await enablePushHere()) viewRegulars(); });
+    return;
+  }
   if (!parent) extras = extras.filter((e) => !e.adults_only);
   const myAsk = {};
   if (!parent) requests.filter((r) => r.person_id === S.meId)
@@ -1710,6 +1723,10 @@ async function viewRegulars() {
     <header class="block-head">
       <h1>Extras</h1>
       ${weekBannerHTML(S.weeks.find((w) => w.id === weekId)?.start_date || "")}</header>
+    ${parent && kids.length ? `<div class="remind-row">
+      <span class="hint">Remind to add extras</span>
+      ${kids.map((k) => `<button class="nudgeExtras ghost" data-id="${k.id}" data-name="${esc(k.name)}">🛒 ${esc(k.name)}${k.notifiable ? "" : " 🔕"}</button>`).join("")}
+    </div>` : ""}
     ${parent && requests.length ? `<section class="block">
       <h2 class="sec-title">⏳ ${requests.length} request${requests.length === 1 ? "" : "s"} waiting for your OK</h2>
       <div class="card pad">${requests.map((r) => `
@@ -1806,6 +1823,12 @@ async function viewRegulars() {
     const extra = extras.find((x) => x.id === +b.dataset.id);
     if (extra) extraEditor(extra);
   }));
+  document.querySelectorAll(".nudgeExtras").forEach((b) => (b.onclick = busy(b, async () => {
+    try {
+      const r = await api.post("/api/push/nudge-extras", { actor_id: S.meId, target_id: +b.dataset.id });
+      toast(r.devices ? `Reminded ${b.dataset.name}.` : `${b.dataset.name} hasn't turned notifications on.`, r.devices ? "good" : "bad");
+    } catch (e) { toast(e.message, "bad"); }
+  })));
   document.querySelectorAll(".xReq").forEach((b) => (b.onclick = busy(b, async () => {
     try {
       await api.post("/api/extra-request/resolve", { id: +b.dataset.id, decision: b.dataset.d, resolver_id: S.meId });
@@ -2076,7 +2099,7 @@ async function viewVote() {
   // and not necessarily "next week" if that one's already been locked in.
   const voteWeekId = S.voteWeekId;
   if (!S.meals.length) S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
-  const { tally, my_vetoes = [], vetoes_allowed: vAllowed = 1, target } = await api.get(`/api/poll?id=${voteWeekId}&person=${S.meId || ""}`);
+  const { tally, my_vetoes = [], vetoes_allowed: vAllowed = 1, target, picks = [] } = await api.get(`/api/poll?id=${voteWeekId}&person=${S.meId || ""}`);
   const vLeft = vAllowed - my_vetoes.length;
   const parent = isParent();
   const typeFilter = S.voteTypeFilter || "";
@@ -2113,7 +2136,10 @@ async function viewVote() {
       <h1>Vote ${meBadge()}</h1>
       <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}${parent ? ` <button id="voteTargetToggle" class="inline-edit" aria-expanded="false" aria-label="Change which week we're voting for" title="Change which week">✏️</button>` : ""}</span></header>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
-    ${parent && S.votingOpen ? `<button id="remindVoters" class="ghost" style="display:block;margin:0 auto 10px">🔔 Remind everyone who hasn't voted</button>` : ""}
+    ${parent && S.votingOpen && picks.some((x) => x.id !== S.meId && x.used < target) ? `<div class="remind-row">
+      <span class="hint">Still to vote · tap to remind</span>
+      ${picks.filter((x) => x.id !== S.meId && x.used < target).map((x) => `<button class="remindOne ghost" data-id="${x.id}" data-name="${esc(x.name)}" ${x.notifiable ? "" : `title="Hasn't turned notifications on"`}>🔔 ${esc(x.name)} · ${target - x.used} left${x.notifiable ? "" : " 🔕"}</button>`).join("")}
+    </div>` : ""}
     ${S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
     ${parent ? `<div class="add-options hidden" id="voteTargetOptions">
       <label class="mini"><span>Vote on</span>
@@ -2238,15 +2264,12 @@ async function viewVote() {
   const finalizeToggle = document.getElementById("voteFinalizeToggle");
   if (finalizeToggle) finalizeToggle.onclick = () => { S.voteFinalizeOpen = !S.voteFinalizeOpen; viewVote(); };
   wireFinalizePanel(voteWeekId);
-  const rv = document.getElementById("remindVoters");
-  if (rv) rv.onclick = busy(rv, async () => {
+  document.querySelectorAll(".remindOne").forEach((b) => (b.onclick = busy(b, async () => {
     try {
-      const r = await api.post("/api/push/remind", { week_id: voteWeekId, actor_id: S.meId });
-      const off = r.unreachable.length ? `${r.unreachable.join(", ")} ${r.unreachable.length === 1 ? "hasn't" : "haven't"} turned notifications on` : "";
-      toast(!r.names.length && !off ? "Everyone's voted already 🎉"
-        : r.names.length ? `Reminded ${r.names.join(", ")}${off ? `. ${off}` : ""}.` : `Nobody could be reminded: ${off}.`, "good", 7000);
+      const r = await api.post("/api/push/remind", { week_id: voteWeekId, actor_id: S.meId, target_id: +b.dataset.id });
+      toast(r.names.length ? `Reminded ${b.dataset.name}.` : `${b.dataset.name} hasn't turned notifications on.`, r.names.length ? "good" : "bad");
     } catch (e) { toast(e.message, "bad"); }
-  });
+  })));
   document.querySelectorAll(".vote-type-filter .tagf").forEach((b) => (b.onclick = () => {
     S.voteTypeFilter = b.dataset.typef; viewVote();
   }));
@@ -2446,6 +2469,9 @@ async function viewSettings() {
       <label class="field"><span>Meals needed per week (default)</span>
         <input id="mealsTargetSel" type="number" min="1" value="${S.mealsTargetDefault}"></label>
       <p class="hint">Can still be bumped up for one busy or holiday week from the Vote page.</p>
+      <label class="field field-check"><span>Children need notifications on to ask for extras</span>
+        <input id="extrasNeedPushChk" type="checkbox" ${S.extrasNeedPush ? "checked" : ""}></label>
+      <p class="hint">So your "anything from the shop?" reminders always reach them.</p>
       <label class="field field-check"><span>Allow historic edits</span>
         <input id="historicEditsChk" type="checkbox" ${S.allowHistoricEdits ? "checked" : ""}></label>
       <p class="hint">Off by default: days that have already been and gone show as read-only history
@@ -2681,6 +2707,12 @@ async function viewSettings() {
   if (morrisonsChk) morrisonsChk.onchange = busy(morrisonsChk, async (e) => {
     const res = await api.post("/api/config", { morrisons_enabled: e.target.checked ? 1 : 0, admin_id: p.id });
     if (res.error) return toast(res.error, "bad");
+    await boot(); viewSettings();
+  });
+  const enpChk = document.getElementById("extrasNeedPushChk");
+  if (enpChk) enpChk.onchange = busy(enpChk, async (e) => {
+    try { await api.post("/api/config", { extras_need_push: e.target.checked ? 1 : 0, admin_id: p.id }); }
+    catch (ex) { return toast(ex.message, "bad"); }
     await boot(); viewSettings();
   });
   const historicEditsChk = document.getElementById("historicEditsChk");
@@ -3601,6 +3633,21 @@ async function currentSub() {
   const reg = await navigator.serviceWorker.ready;
   return reg.pushManager.getSubscription();
 }
+// Ask permission, subscribe this browser, register it for the signed-in person.
+async function enablePushHere() {
+  try {
+    if (!("serviceWorker" in navigator && "PushManager" in window && isSecureContext))
+      throw new Error("this browser can't. On iPhone, open the app from your home screen");
+    if (await Notification.requestPermission() !== "granted") throw new Error("permission wasn't given");
+    const { key } = await api.get(`/api/push/state?person_id=${S.meId}`);
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+    await api.post("/api/push/subscribe", { person_id: S.meId, sub: sub.toJSON() });
+    toast("Notifications on", "good");
+    return true;
+  } catch (e) { toast("Couldn't turn on notifications: " + e.message, "bad"); return false; }
+}
+
 async function renderPushCard(p) {
   const card = document.getElementById("pushCard");
   if (!card) return;
@@ -3631,16 +3678,7 @@ async function renderPushCard(p) {
     catch (e) { toast(e.message, "bad"); }
   };
   const on = document.getElementById("pushOn");
-  if (on) on.onclick = async () => {
-    try {
-      if (await Notification.requestPermission() !== "granted") return renderPushCard(p);
-      const reg = await navigator.serviceWorker.ready;
-      const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(st.key) });
-      await api.post("/api/push/subscribe", { person_id: p.id, sub: s.toJSON() });
-      toast("Notifications on", "good");
-    } catch (e) { toast("Couldn't turn on notifications: " + e.message, "bad"); }
-    renderPushCard(p);
-  };
+  if (on) on.onclick = async () => { await enablePushHere(); renderPushCard(p); };
   const off = document.getElementById("pushOff");
   if (off) off.onclick = async () => {
     const s = await currentSub();

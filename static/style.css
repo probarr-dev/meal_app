@@ -1457,3 +1457,8 @@ body[data-tab="compare"] main { max-width:1150px; }
 :root[data-notepad="1"][data-pad="dark"] #openAddExtra,
 :root[data-notepad="1"][data-pad="dark"] #exAdd { background:#2f7d52 !important; color:#f3efe4 !important; }
 :root[data-notepad="1"][data-pad="dark"] .usualChip { background:color-mix(in srgb, var(--good) 18%, var(--card)); border-color:color-mix(in srgb, var(--good) 45%, var(--border)); color:var(--text); }
+
+/* Parents' one-tap reminders (Vote: who still has picks; Extras: nudge to add extras). */
+.remind-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0 0 12px; }
+.remind-row .hint { width:100%; margin:0; }
+.remind-row button { padding:8px 12px; border-radius:999px; }
