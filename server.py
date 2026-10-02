@@ -8,6 +8,7 @@ import math
 import os
 import re
 import sqlite3
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -575,6 +576,60 @@ def aldi_trim(p):
     return {"sku": p.get("sku"), "name": p.get("name") or "", "brand": p.get("brandName") or "",
             "size": p.get("sellingSize") or "", "price": ((p.get("price") or {}).get("amount") or 0) / 100,
             "category": " › ".join(cats[:2])}
+
+
+def aldi_by_code(code):
+    """Aldi products for a receipt product code (its sku is the code, zero-padded, plus a
+    3-digit variant). [] = Aldi has no such product; None = couldn't reach Aldi (try later)."""
+    found = []
+    for suffix in ("001", "002", "003", "004", "005", "006"):
+        sku = code.zfill(15) + suffix
+        hit = cache_get("a:sku:" + sku)
+        if hit is None:
+            try:
+                hit = [aldi_trim(aldi_get(f"/v2/products/{sku}?currency=GBP&serviceType=walk-in")["data"])]
+            except urllib.error.HTTPError as e:
+                if e.code != 404:  # only a real "no such product" is worth remembering
+                    return None
+                hit = []
+            except Exception:
+                return None
+            cache_put("a:sku:" + sku, hit)
+        found += hit
+        if not hit and found:
+            break  # variants run 001, 002...; the first gap ends them
+    if not found:  # older products carry the code as the whole 18-digit sku
+        try:
+            found = [aldi_trim(aldi_get(f"/v2/products/{code.zfill(18)}?currency=GBP&serviceType=walk-in")["data"])]
+        except Exception:
+            found = []
+    return found
+
+
+def auto_link_receipt_products(db):
+    """Receipt products that count as a list item: if Aldi knows the exact code, link it
+    to that item's "counted as" row without anyone searching. Runs after each receipt is saved."""
+    with db() as conn:
+        receipt_tables(conn)
+        have = {(r["item_key"], r["variant_code"]) for r in conn.execute(
+            "SELECT item_key, variant_code FROM price_product WHERE variant_code IS NOT NULL")}
+        skus = {}
+        for r in conn.execute("SELECT item_key, sku FROM price_product WHERE COALESCE(store,'aldi')='aldi' AND variant_code IS NULL"):
+            skus.setdefault(r["item_key"], set()).update({r["sku"].lstrip("0"), r["sku"].lstrip("0")[:6]})
+        todo = [(r["item_key"], r["code"]) for r in conn.execute(
+            """SELECT DISTINCT item_key, code FROM receipt_line
+               WHERE item_key IS NOT NULL AND code IS NOT NULL AND code!='' AND kind!='treat'""")
+            if (r["item_key"], r["code"]) not in have and r["code"].lstrip("0") not in skus.get(r["item_key"], ())]
+        # Look everything up first: the lookup caches in its own connection, which would
+        # block on this one once it has a write open.
+        looked = [(key, code, aldi_by_code(code) or []) for key, code in todo]
+        for key, code, products in looked:
+            for p in products:
+                if not conn.execute("SELECT 1 FROM price_product WHERE item_key=? AND sku=?", (key, p["sku"])).fetchone():
+                    conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,store,variant_code,checked_at)
+                                    VALUES (?,?,?,?,?,?,?,'aldi',?,datetime('now'))""",
+                                 (key, p["sku"], p["name"], p["brand"], p["size"], p["price"], p["category"], code))
+        conn.commit()
 
 
 def vetoes_allowed(conn):
@@ -1563,29 +1618,9 @@ class Handler(SimpleHTTPRequestHandler):
                 except Exception:
                     return self.send_json({"error": "Couldn't reach Morrisons just now."}, 502)
             if re.fullmatch(r"\d{4,9}", term):  # a receipt product code: look the product up directly
-                found = []
-                for suffix in ("001", "002", "003", "004", "005", "006"):
-                    sku = term.zfill(15) + suffix
-                    hit = cache_get("a:sku:" + sku)
-                    if hit is None:
-                        try:
-                            d = aldi_get(f"/v2/products/{sku}?currency=GBP&serviceType=walk-in")["data"]
-                            hit = [aldi_trim(d)]
-                        except urllib.error.HTTPError as e:
-                            if e.code != 404:  # only a real "no such product" is worth remembering
-                                return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
-                            hit = []
-                        except Exception:
-                            return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
-                        cache_put("a:sku:" + sku, hit)
-                    found += hit
-                    if not hit and found:
-                        break  # variants run 001, 002...; the first gap ends them
-                if not found:  # older products carry the code as the whole 18-digit sku
-                    try:
-                        found = [aldi_trim(aldi_get(f"/v2/products/{term.zfill(18)}?currency=GBP&serviceType=walk-in")["data"])]
-                    except Exception:
-                        found = []
+                found = aldi_by_code(term)
+                if found is None:
+                    return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
                 return self.send_json({"results": found, "byCode": True})
             hit = cache_get("a:" + term.lower())
             if hit is not None:
@@ -2486,6 +2521,7 @@ class Handler(SimpleHTTPRequestHandler):
                                      (nm, "Cupboard"))
             conn.execute("UPDATE week SET shop_total=? WHERE id=?", (round(total, 2), wid))
             conn.commit()
+            threading.Thread(target=auto_link_receipt_products, args=(db,), daemon=True).start()
             return self.send_json({"ok": True})
 
         if path == "/api/receipt/summary":
