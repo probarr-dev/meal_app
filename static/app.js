@@ -528,33 +528,6 @@ const tagEmojis = (m) => {
 
 const weekWords = (id) => (id === S.thisWeekId ? "this week" : id === S.nextWeekId ? "next week" : "the week of");
 
-const advanceWeekHTML = () =>
-  `<div class="notice small good no-print">
-    ✅ <strong>This week's shop is done.</strong>
-    <button id="advanceWeekBtn" class="ghost" style="margin-left:6px">Start next week →</button>
-    <span class="hint" style="display:block;margin-top:2px">New "anything else?" requests will land on the week after this one instead.</span>
-  </div>`;
-
-function wireAdvanceWeek(afterHash) {
-  const btn = document.getElementById("advanceWeekBtn");
-  if (!btn) return;
-  btn.onclick = busy(btn, async () => {
-    if (!(await confirmDialog('Start next week? "This Week" and "Next Week" will both shift forward.'))) return;
-    // Always S.nextWeekId, not S.weekId. The banner now shows while standing
-    // on THIS week (that's the natural moment), but "advance" always means
-    // "next week becomes the new this week" — sending S.weekId here pins the
-    // app to the week it's already on, a silent no-op. Bit me the moment this
-    // moved off the old "viewing Next Week" gate; hardcoding the target
-    // instead of reading it off wherever the button happens to be shown.
-    const res = await api.post("/api/week/advance", { week_id: S.nextWeekId, actor_id: S.meId });
-    if (res.error) return toast(res.error, "bad");
-    S.weekId = null;
-    await boot();
-    location.hash = afterHash;
-    route();
-  });
-}
-
 // A suggested meal starts as just a name — no ingredients, so it can't go on
 // the shopping list yet. Checked live against S.meals (not the `draft` flag)
 // so it stays accurate even for an older meal that was never marked draft.
@@ -1039,7 +1012,6 @@ async function viewPlan() {
       viewPlan();
     });
   });
-  wireAdvanceWeek("#/plan");
 }
 
 // Read-only "what's actually in this?" glance from the Plan page — the common
@@ -1601,7 +1573,6 @@ async function viewShopping() {
     return viewShopping();
   });
 
-  wireAdvanceWeek("#/shopping");
 }
 
 /* --------------------------------------------------- regulars (usual items) */
