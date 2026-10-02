@@ -806,6 +806,50 @@ RECEIPT_QTY = re.compile(r"^\s*(\d+)\s*[xX]\s+(\d+\.\d{2})\s*$")
 RECEIPT_DISC = re.compile(r"(-\d+\.\d{2})\s*[AB]?\s*$")
 
 
+RECEIPT_CODE = re.compile(r"^(\d{4,8})(?:\s+(.+))?$")
+# A line total with its VAT letter ("1.79 B"); Live Text sometimes reads B as "฿" and
+# "." as ",", and can glue two onto one line ("3.10 A1.15 A").
+RECEIPT_PRICE = re.compile(r"(\d+[.,]\d{2})\s*[AB฿]")
+
+
+def parse_receipt_columns(text, total=None):
+    """Live Text often reads the receipt as two columns: every product line first,
+    then every price at the end. Pair the Nth product with the Nth lettered price.
+    Unlettered numbers are unit prices or the grand total, so they're skipped."""
+    items, prices, last_plain, unit = [], [], None, None
+    rows_ = [r.strip() for r in (text or "").splitlines() if r.strip()]
+    i = 0
+    while i < len(rows_):
+        t = rows_[i]
+        m = RECEIPT_CODE.match(t)
+        if m and not RECEIPT_PRICE.search(t):
+            name = m.group(2)
+            if not name and i + 1 < len(rows_) and re.search(r"[A-Za-z]{2}", rows_[i + 1]) \
+                    and not RECEIPT_CODE.match(rows_[i + 1]):
+                name = rows_[i + 1]; i += 1
+            items.append({"code": m.group(1), "text": (name or "").strip(), "qty": 1, "unit": unit})
+            unit = None
+        else:
+            found = RECEIPT_PRICE.findall(t)
+            if found:
+                prices += [float(x.replace(",", ".")) for x in found]
+            elif re.fullmatch(r"\d+[.,]\d{2}", t):
+                last_plain = unit = float(t.replace(",", "."))  # a multi-buy's unit price, or the total
+        i += 1
+    if not items or len(items) != len(prices):
+        return [], total
+    lines = []
+    for it, amt in zip(items, prices):
+        u = it.pop("unit")
+        # "5.05" just before "BEEF MINCE" and a line total of 10.10 means 2 x 5.05.
+        if u and amt > u and abs(amt / u - round(amt / u)) < 0.01:
+            it["qty"] = int(round(amt / u))
+        lines.append({**it, "amount": amt})
+    if total is None and last_plain is not None and abs(sum(prices) - last_plain) < 0.01:
+        total = last_plain  # the unlettered grand total at the bottom
+    return lines, total
+
+
 def parse_receipt(text):
     """Aldi UK receipt text (e.g. pasted from iPhone Live Text) -> lines + totals."""
     lines, pending_qty, total, count = [], None, None, None
@@ -838,6 +882,8 @@ def parse_receipt(text):
         if m and lines:  # "30.0%  -0.30 A" reduces the line above
             lines[-1]["amount"] = round(lines[-1]["amount"] + float(m.group(1)), 2)
             lines[-1]["discount"] = True
+    if not lines:
+        lines, total = parse_receipt_columns(text, total)
     # identical consecutive lines are the same product bought twice: merge
     merged = []
     for ln in lines:
