@@ -1739,6 +1739,14 @@ async function viewRegulars() {
     <header class="block-head">
       <h1>Extras</h1>
       ${weekBannerHTML(S.weeks.find((w) => w.id === weekId)?.start_date || "")}</header>
+    ${parent && requests.length ? `<section class="block">
+      <h2 class="sec-title">⏳ ${requests.length} request${requests.length === 1 ? "" : "s"} waiting for your OK</h2>
+      <div class="card pad">${requests.map((r) => `
+        <div class="row redemption-row">
+          <span class="row-label">${esc(r.person)} wants <strong>${esc(r.item)}</strong>${r.amount > 1 ? ` × ${r0(r.amount)}` : ""}</span>
+          <button class="xReq" data-id="${r.id}" data-d="approve">Approve</button>
+          <button class="xReq ghost" data-id="${r.id}" data-d="deny">Say no</button>
+        </div>`).join("")}</div></section>` : ""}
     ${cycleStripHTML("shop")}
     <div class="notice pantry-intro">🛒 Adding to your <strong>next shop</strong>
       (${esc(fmtWeekRange(S.weeks.find((w) => w.id === weekId)?.start_date || ""))}).</div>
@@ -1827,6 +1835,12 @@ async function viewRegulars() {
     const extra = extras.find((x) => x.id === +b.dataset.id);
     if (extra) extraEditor(extra);
   }));
+  document.querySelectorAll(".xReq").forEach((b) => (b.onclick = busy(b, async () => {
+    try {
+      await api.post("/api/extra-request/resolve", { id: +b.dataset.id, decision: b.dataset.d, resolver_id: S.meId });
+      viewRegulars();
+    } catch (e) { toast(e.message, "bad"); }
+  })));
 }
 
 /* ---------------------------------------------------------------- meals */
@@ -2180,6 +2194,7 @@ async function viewVote() {
         // line exists to carry with a note about you — the cap is explained on
         // tap now, so it doesn't need to squat here.
         const standing = vetoedByAnyone ? "Vetoed — sick of this one"
+          : m.v.favourite ? `✅ Family favourite · ${m.v.total} votes · ${esc(m.v.voters || "")}`
           : m.v.total ? `${m.v.total} vote${m.v.total > 1 ? "s" : ""} · ${esc(m.v.voters || "")}`
           : "No votes yet";
         return `
@@ -2318,7 +2333,7 @@ function renderFinalizePanel(tally, target) {
       <div class="overview-days"><div class="overview-day">
         ${ranked.filter((t) => t.total > 0 || t.chosen).map((t) => `
           <label class="overview-row ${t.chosen ? "applied" : ""}">
-            <input type="checkbox" class="finalizeCb" data-id="${t.id}" ${t.chosen ? "checked" : ""}>
+            <input type="checkbox" class="finalizeCb" data-id="${t.id}" ${t.chosen || t.favourite ? "checked" : ""}>
             <span class="ov-body">
               <span class="ov-name">${esc(t.name)} <span class="vote-who">${voterChips(t.voters)}</span> ${ingredientsWarningHTML(mealNeedsIngredients(t.id))}</span>
             </span>

@@ -1506,9 +1506,20 @@ class Handler(SimpleHTTPRequestHandler):
                     e["total"] = 0
                     e["voters"] = ""
                 tally.extend(extra)
+            # "Family favourite": liked by more than half the household, at least
+            # one parent among them, and not vetoed. Only pre-ticks the finalise
+            # list; a parent still finalises, and a later veto clears it.
+            household = conn.execute("SELECT COUNT(*) FROM person WHERE is_placeholder=0").fetchone()[0]
+            likes = {}
+            for r in conn.execute("""SELECT v.meal_id, p.role FROM meal_vote v JOIN person p ON p.id=v.person_id
+                                     WHERE v.week_id=? AND p.is_placeholder=0""", (wid,)):
+                n, par = likes.get(r["meal_id"], (0, False))
+                likes[r["meal_id"]] = (n + 1, par or r["role"] == "parent")
             for t in tally:
                 t["vetoed"] = t["id"] in vetoed
                 t["chosen"] = t["id"] in chosen
+                n, par = likes.get(t["id"], (0, False))
+                t["favourite"] = n * 2 > household and par and not t["vetoed"]
             my_veto, my_vetoes = None, []
             mine = set()
             me_q = q.get("person", [""])[0]
