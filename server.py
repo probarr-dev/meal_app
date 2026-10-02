@@ -103,6 +103,8 @@ def migrate(conn):
         ("week", "confirmed", "INTEGER DEFAULT 0"),
         ("person", "color", "TEXT"),
         ("person", "emoji", "TEXT"),
+        # Set (UTC "YYYY-MM-DD HH:MM:SS") while someone's on a short break from asking for extras.
+        ("person", "extras_timeout_until", "TEXT"),
         ("extra", "adults_only", "INTEGER DEFAULT 0"),
         ("meal", "no_ingredients", "INTEGER DEFAULT 0"),
         ("price_product", "store", "TEXT DEFAULT 'aldi'"),
@@ -1221,6 +1223,60 @@ def extras_need_push(conn):
     return bool(row and row["value"] == "1")
 
 
+FLOOD_NOTICES = [
+    "You're requesting a lot at once 👀",
+    "Are you sure you want all this stuff? 🤨",
+    "You're just being silly now. One more and it all resets. 🙃",
+]
+
+
+def flood_settings(conn):
+    """(limit, timeout_minutes). Limit = requests per person per week before a reset; 0 = off."""
+    def get(k, d):
+        r = conn.execute("SELECT value FROM config WHERE key=?", (k,)).fetchone()
+        return int(r["value"]) if r else d
+    return get("extras_flood_limit", 12), get("extras_flood_timeout_min", 15)
+
+
+def extras_timeout_left(conn, person_id):
+    """Minutes (rounded up) left of a short break from asking for extras, else 0."""
+    r = conn.execute("""SELECT CAST((julianday(extras_timeout_until) - julianday('now')) * 1440 + 0.99 AS INTEGER) m
+                        FROM person WHERE id=? AND extras_timeout_until > datetime('now')""", (person_id,)).fetchone()
+    return max(1, r["m"]) if r else 0
+
+
+def flood_check(conn, db, person_id, week_id):
+    """After a new request: warn as someone piles them up, and at the limit wipe their
+    requests for the week (and the history of them) and give them a short break.
+    Items a parent already approved stay on the list. Returns {"level", "text"} or None."""
+    limit, minutes = flood_settings(conn)
+    if limit < 2:
+        return None
+    n = conn.execute("SELECT COUNT(*) c FROM extra_request WHERE person_id=? AND week_id=?",
+                     (person_id, week_id)).fetchone()["c"]
+    if n >= limit:
+        conn.execute("DELETE FROM extra_request WHERE person_id=? AND week_id=?", (person_id, week_id))
+        conn.execute("""DELETE FROM extra_log WHERE person_id=? AND week_id=? AND (action LIKE 'asked for%'
+                        OR action LIKE 'cancelled ask%' OR action LIKE 'request %')""", (person_id, week_id))
+        if minutes > 0:
+            conn.execute("UPDATE person SET extras_timeout_until=datetime('now', ?) WHERE id=?",
+                         (f"+{minutes} minutes", person_id))
+        conn.commit()
+        name = conn.execute("SELECT name FROM person WHERE id=?", (person_id,)).fetchone()["name"]
+        push.notify(conn, db, push.people(conn, role="parent"), "extra_request", "Request limit hit",
+                    f"{name} asked for {n} things this week, so their requests were reset"
+                    + (f" and they're on a {minutes} minute break." if minutes > 0 else "."),
+                    "/#/extras", extra={"tag": f"flood-{person_id}"})
+        return {"level": 4, "text": "Your requests for this week have been fully reset."
+                + (f" You're on a short break from asking, back in {minutes} minute{'s' if minutes != 1 else ''}. ⏳" if minutes > 0 else "")}
+    marks = [-(-limit // 2), -(-limit * 3 // 4), limit - 1]  # roughly half, three-quarters, one short of the limit
+    if sorted(set(marks)) == marks and marks[0] >= 1:
+        for lvl, m in enumerate(marks):
+            if n == m:
+                return {"level": lvl + 1, "text": FLOOD_NOTICES[lvl]}
+    return None
+
+
 def extras_blocked(conn, me):
     return (me["role"] != "parent" and push.AVAILABLE and extras_need_push(conn)
             and not conn.execute("SELECT 1 FROM push_sub WHERE person_id=?", (me["id"],)).fetchone())
@@ -1505,6 +1561,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "morrisonsEnabled": morrisons_enabled(conn),
                 "vetoesPerPerson": vetoes_allowed(conn),
                 "extrasNeedPush": extras_need_push(conn),
+                "extrasFloodLimit": flood_settings(conn)[0], "extrasFloodTimeoutMin": flood_settings(conn)[1],
+                "lastBackup": (conn.execute("SELECT value FROM config WHERE key='last_backup'").fetchone() or {"value": None})["value"],
                 "allowHistoricEdits": (conn.execute(
                     "SELECT value FROM config WHERE key='allow_historic_edits'").fetchone()
                     or {"value": "0"})["value"] == "1",
@@ -1733,6 +1791,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.me["is_admin"]:
                 return self.send_json({"error": "Admins only."}, 403)
             body = make_backup_bytes()
+            conn.execute("""INSERT INTO config(key,value) VALUES ('last_backup',?)
+                            ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                         (json.dumps({"at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                      "by": self.me["name"]}),))
+            conn.commit()
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f'attachment; filename="mealplan-backup-{date.today().isoformat()}.db"')
@@ -2318,6 +2381,9 @@ class Handler(SimpleHTTPRequestHandler):
                                    "alreadyOnList": bool(b.get("week_id")) and not added_to_week
                                                     and not int(b.get("recurring", 0))})
 
+        if path in ("/api/extra-request", "/api/extra-request/set") and (left := extras_timeout_left(conn, self.me["id"])):
+            return self.send_json({"error": f"You're on a short break from asking for extras. Try again in {left} minute{'s' if left != 1 else ''}."}, 403)
+
         if path == "/api/extra-request":
             if extras_blocked(conn, self.me):
                 return self.send_json({"error": "Turn on notifications first (Settings → Notifications)."}, 403)
@@ -2332,8 +2398,10 @@ class Handler(SimpleHTTPRequestHandler):
                           b.get("unit") or "unit", b.get("aisle") or "Household", b["week_id"]))
             log_extra(conn, b["person_id"], item, b["week_id"], "asked for")
             conn.commit()
-            notify_extra_ask(conn, b["person_id"], item, rid.lastrowid)
-            return self.send_json({"ok": True})
+            notice = flood_check(conn, db, b["person_id"], b["week_id"])
+            if not notice or notice["level"] < 4:  # a reset request is gone, so don't ping about it
+                notify_extra_ask(conn, b["person_id"], item, rid.lastrowid)
+            return self.send_json({"ok": True, "notice": notice})
 
         if path == "/api/extra-request/resolve":
             if not is_parent(conn, b.get("resolver_id")):
@@ -2686,9 +2754,12 @@ class Handler(SimpleHTTPRequestHandler):
                              (b["person_id"], ex["item"], qty, ex["unit"], ex["aisle"], b["week_id"]))
             log_extra(conn, b["person_id"], ex["item"], b["week_id"], f"asked for {qty}" if qty else "cancelled ask")
             conn.commit()
+            notice = None
             if qty and not pend:  # a new ask, not +/- on one that's already waiting
-                notify_extra_ask(conn, b["person_id"], ex["item"], rid.lastrowid)
-            return self.send_json({"ok": True, "qty": qty})
+                notice = flood_check(conn, db, b["person_id"], b["week_id"])
+                if not notice or notice["level"] < 4:
+                    notify_extra_ask(conn, b["person_id"], ex["item"], rid.lastrowid)
+            return self.send_json({"ok": True, "qty": 0 if notice and notice["level"] == 4 else qty, "notice": notice})
 
         if path == "/api/extra/set-qty":
             if not is_parent(conn, b.get("by")):
@@ -2886,6 +2957,11 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('extras_need_push',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              ("1" if int(b["extras_need_push"]) else "0",))
+            for k, hi in (("extras_flood_limit", 99), ("extras_flood_timeout_min", 240)):
+                if k in b:
+                    conn.execute("""INSERT INTO config(key,value) VALUES (?,?)
+                                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                                 (k, str(max(0, min(hi, int(b[k]))))))
             if "allow_historic_edits" in b:
                 conn.execute("""INSERT INTO config(key,value) VALUES ('allow_historic_edits',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

@@ -192,7 +192,15 @@ async function req(path, opts) {
     throw new Error("Signed out");
   }
   if (!res.ok || body.error) throw new Error(body.error || `${path} → HTTP ${res.status}`);
+  if (body.notice) showRequestNotice(body.notice);
   return body;
+}
+
+// A nudge when someone piles up extra requests (levels 1-3), and the reset at the limit (4).
+function showRequestNotice(n) {
+  const html = `<p style="font-size:1.15rem;text-align:center;margin:8px 0">${esc(n.text)}</p>
+    <button class="primary" style="width:100%" onclick="closeModal()">${n.level === 4 ? "OK" : "Fair enough"}</button>`;
+  setTimeout(() => { openModal(n.level === 4 ? "Requests reset" : "Hold on…", html); if (n.level === 4 && typeof boot === "function") boot().then(() => route()); }, 0);
 }
 
 // Sign-in (or, on a brand-new install, create the first account). Plain
@@ -646,6 +654,8 @@ async function boot() {
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
   S.extrasNeedPush = !!b.extrasNeedPush;
+  S.extrasFloodLimit = b.extrasFloodLimit ?? 12; S.extrasFloodTimeoutMin = b.extrasFloodTimeoutMin ?? 15;
+  S.lastBackup = b.lastBackup ? JSON.parse(b.lastBackup) : null;
   S.morrisonsEnabled = !!b.morrisonsEnabled;
   S.vetoesPerPerson = b.vetoesPerPerson ?? 1;
   S.shopDone = !!b.shopDone;
@@ -2520,6 +2530,13 @@ async function viewSettings() {
       <label class="field field-check"><span>Children need notifications on to ask for extras</span>
         <input id="extrasNeedPushChk" type="checkbox" ${S.extrasNeedPush ? "checked" : ""}></label>
       <p class="hint">So your "anything from the shop?" reminders always reach them.</p>
+      <label class="field"><span>Requests per person per week before a reset</span>
+        <input id="floodLimit" type="number" min="0" max="99" value="${S.extrasFloodLimit}"></label>
+      <label class="field"><span>Then a break from asking (minutes)</span>
+        <input id="floodMins" type="number" min="0" max="240" value="${S.extrasFloodTimeoutMin}"></label>
+      <p class="hint">Past about half the limit they get a few "are you sure?" warnings. At the limit their requests
+        for the week (and the history of them) are cleared, you're told, and they can't ask again for the break.
+        Anything you'd already approved stays on the list. 0 turns this off.</p>
       <label class="field field-check"><span>Allow historic edits</span>
         <input id="historicEditsChk" type="checkbox" ${S.allowHistoricEdits ? "checked" : ""}></label>
       <p class="hint">Off by default: days that have already been and gone show as read-only history
@@ -2574,12 +2591,14 @@ async function viewSettings() {
     <div class="card pad">
       ${isAdmin() ? `<p class="subtitle"><strong>Full backup</strong> is everything, including passwords and sign-ins, so keep the file private.
         Restoring it puts the app back exactly as it was and replaces what's here now.</p>
+      <p class="subtitle">Last full backup: <strong>${S.lastBackup ? `${esc(new Date(S.lastBackup.at.replace(" ", "T") + "Z").toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }))} by ${esc(S.lastBackup.by)}` : "never"}</strong></p>
       <a class="btn-link" href="/api/backup" download>Download full backup</a>
       <button id="restoreBtn" class="ghost">Restore from a backup…</button>
       <input type="file" id="restoreFile" accept=".db,application/octet-stream" hidden>
       <p class="subtitle" style="margin-top:14px">The readable export has no passwords, for looking at or moving the data.</p>` : ""}
       <a class="btn-link" href="/api/export" download>Download readable export (JSON)</a>
     </div>`;
+  document.querySelector('a[href="/api/backup"]')?.addEventListener("click", () => setTimeout(() => boot().then(viewSettings), 1500));
   const rb = document.getElementById("restoreBtn"), rf = document.getElementById("restoreFile");
   if (rb) {
     rb.onclick = () => rf.click();
@@ -2777,6 +2796,13 @@ async function viewSettings() {
     if (res.error) return toast(res.error, "bad");
     await boot(); viewSettings();
   });
+  for (const [id, key, msg] of [["floodLimit", "extras_flood_limit", "Request limit saved."], ["floodMins", "extras_flood_timeout_min", "Break length saved."]]) {
+    const el = document.getElementById(id);
+    if (el) el.onchange = async () => {
+      try { await api.post("/api/config", { [key]: +el.value || 0, admin_id: p.id }); toast(msg, "good"); await boot(); }
+      catch (ex) { toast(ex.message, "bad"); }
+    };
+  }
   const enpChk = document.getElementById("extrasNeedPushChk");
   if (enpChk) enpChk.onchange = busy(enpChk, async (e) => {
     try { await api.post("/api/config", { extras_need_push: e.target.checked ? 1 : 0, admin_id: p.id }); }
