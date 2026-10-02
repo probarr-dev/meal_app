@@ -758,6 +758,12 @@ def price_links(conn):
     return out
 
 
+def pick_one_keys(conn):
+    """Keys of extras with options (the shared Breakfast): their spend is food that gets eaten
+    as part of the week's meals, so receipts count it under Meals, not Extras."""
+    return {item_key(r["item"]) for r in conn.execute("SELECT item FROM extra WHERE COALESCE(options,'')!=''")}
+
+
 def add_estimate(conn, groups):
     """Attach a price range per shopping item and a whole-shop estimate."""
     links = price_links(conn)
@@ -767,6 +773,16 @@ def add_estimate(conn, groups):
                              WHERE rl.item_key IS NOT NULL ORDER BY rc.id DESC"""):
         if len(paid.setdefault(r["item_key"], [])) < 4:
             paid[r["item_key"]].append(r["amount"])
+    weekly = {}  # pick-one extras: total spent per shop, newest 6 shops (all their lines added up)
+    po = pick_one_keys(conn)
+    if po:
+        per = {}
+        for r in conn.execute("""SELECT rl.item_key, rc.id rid, SUM(rl.amount) s FROM receipt_line rl
+                                 JOIN receipt rc ON rc.id=rl.receipt_id WHERE rl.item_key IN (%s)
+                                 GROUP BY rl.item_key, rc.id ORDER BY rc.id DESC""" % ",".join("?" * len(po)), tuple(po)):
+            if len(per.setdefault(r["item_key"], [])) < 6:
+                per[r["item_key"]].append(r["s"])
+        weekly = per
     low = high = 0.0
     unpriced = []
     for g in groups:
@@ -780,6 +796,8 @@ def add_estimate(conn, groups):
                 continue
             costs = [packs_needed(i["amount"], i["unit"], p["size"]) * p["price"] for p in prods]
             costs += paid.get(i["key"], [])  # what receipts say it actually cost lately
+            if i["key"] in weekly:  # pick-one extra: what a week of it has cost, on average
+                costs = [sum(weekly[i["key"]]) / len(weekly[i["key"]])]
             i["priceLow"], i["priceHigh"] = round(min(costs), 2), round(max(costs), 2)
             if not i.get("pantryChecked"):
                 low += min(costs); high += max(costs)
@@ -911,7 +929,7 @@ def classify_receipt(conn, week_id, lines):
         if key and key in meal_keys:
             ln["kind"] = "meal"
         elif key and key in on_list:
-            ln["kind"] = "extra"
+            ln["kind"] = "meal" if key in pick_one_keys(conn) else "extra"
         elif ln["code"] in learned and learned[ln["code"]]["kind"]:
             ln["kind"] = learned[ln["code"]]["kind"]; ln["remembered"] = True
         else:
@@ -941,7 +959,7 @@ def receipt_list_items(conn, week_id):
     for g in build_shopping(conn, week_id):
         for i in g["items"]:
             for o in i.get("options") or []:  # "Breakfast — Crêpes" counts as that line
-                out.append({"key": i["key"], "label": f"{i['key']} — {o}", "kind": "extra"})
+                out.append({"key": i["key"], "label": f"{i['key']} — {o}", "kind": "meal"})
     return out + [{"key": k, "kind": "meal" if k in meal_keys else "extra"} for k in sorted(keys)]
 
 
@@ -2424,10 +2442,14 @@ class Handler(SimpleHTTPRequestHandler):
             r = conn.execute("SELECT id, total FROM receipt WHERE week_id=?", (b["week_id"],)).fetchone()
             if not r:
                 return self.send_json({"summary": None})
-            by = {k["kind"]: k["s"] for k in rows(conn.execute(
-                "SELECT kind, ROUND(SUM(amount),2) s FROM receipt_line WHERE receipt_id=? GROUP BY kind", (r["id"],)))}
             lines = rows(conn.execute("""SELECT text, qty, amount, item_key, kind FROM receipt_line
                                          WHERE receipt_id=? ORDER BY amount DESC""", (r["id"],)))
+            po = pick_one_keys(conn)
+            by = {}
+            for l in lines:
+                if l["item_key"] in po:
+                    l["kind"] = "meal"  # breakfast counts with the meals, however it was saved
+                by[l["kind"]] = round(by.get(l["kind"], 0) + l["amount"], 2)
             return self.send_json({"summary": {"total": r["total"], "by": by, "lines": lines}})
 
         if path == "/api/compare/pick":
