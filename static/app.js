@@ -3216,6 +3216,7 @@ function priceLinker(key, variant, vname) {
     <div class="pricing-bar"><input id="aldiQ" value="${esc(variant || key)}"><button id="aldiGo" class="primary">Search</button></div>
     <div id="aldiResults" class="aldi-results"><p class="hint">Searching…</p></div>`);
   const added = new Set();
+  let miss = false;
   const run = async () => {
     const box = document.getElementById("aldiResults");
     box.innerHTML = `<p class="hint">Searching…</p>`;
@@ -3223,9 +3224,10 @@ function priceLinker(key, variant, vname) {
     if (!r || r.error) { box.innerHTML = `<p class="danger-text">${esc(r?.error || OFFLINE_MSG)}</p>`; return; }
     if (variant && !r.results.length && store === "aldi" && /^\d+$/.test(document.getElementById("aldiQ").value) && vname && vname !== document.getElementById("aldiQ").value) {
       document.getElementById("aldiQ").value = vname;  // not an Aldi code (or retired): fall back to the till text
+      miss = true;
       return run();
     }
-    box.innerHTML = r.results.map((p, n) => `<div class="aldi-row">
+    box.innerHTML = (miss ? `<p class="hint">Aldi's site doesn't list product ${esc(variant)} (often seasonal, a special buy, or sold out), so this is a text search on the till wording and may be well off.</p>` : "") + r.results.map((p, n) => `<div class="aldi-row">
         <span><strong>${esc(p.name)}</strong> <span class="hint" style="display:inline">${esc(p.brand)} · ${esc(p.size)} · ${esc(p.category)}</span></span>
         <span class="aldi-price">£${p.price.toFixed(2)}</span>
         <button class="aldiAdd ${added.has(p.sku) ? "" : "primary"}" data-n="${n}" ${added.has(p.sku) ? "disabled" : ""}>${added.has(p.sku) ? "Added ✓" : "Add"}</button>
