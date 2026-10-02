@@ -1132,7 +1132,7 @@ function extraEditor(extra) {
         <select id="exEditAisle">${aisleOpts}</select></label>
       <label class="inline"><input type="checkbox" id="exEditRec" ${extra.recurring ? "checked" : ""}> every week</label>
       <label class="field"><span>Pick one of (optional, comma-separated)</span>
-        <input id="exEditOpts" value="${esc(extra.options || "")}" placeholder="e.g. crêpes, pancakes, croissants"></label>
+        <input id="exEditOpts" value="${esc(extra.options || "")}" placeholder="e.g. Aubree: crêpes, Ethan: cereal"></label>
       <label class="inline"><input type="checkbox" id="exEditAdult" ${extra.adults_only ? "checked" : ""}> grown-ups only (kids won't see it)</label>
     </div>
     <div class="modal-actions"><button id="exEditDel" class="ghost danger-text">Delete forever</button><button id="exEditSave" class="primary">Save</button></div>
@@ -2169,7 +2169,7 @@ async function viewVote() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>Vote ${meBadge()}</h1>
-      <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}${parent ? ` <button id="voteTargetToggle" class="inline-edit" aria-expanded="false" aria-label="Change which week we're voting for" title="Change which week">✏️</button>` : ""}</span></header>
+      <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
     ${parent && S.votingOpen && picks.some((x) => x.id !== S.meId && x.used < target) ? `<div class="remind-row">
       <span class="hint">Still to vote · tap to remind</span>
@@ -2177,15 +2177,6 @@ async function viewVote() {
     </div>` : ""}
     ${parent && S.voteFinalizeOpen ? `<div class="votes-left" id="pickCount"></div>`
       : S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
-    ${parent ? `<div class="add-options hidden" id="voteTargetOptions">
-      <label class="mini"><span>Vote on</span>
-        <select id="voteTargetSel">${S.weeks
-          .slice().sort((a, b) => a.start_date.localeCompare(b.start_date))
-          .map((w) => `<option value="${w.id}" ${w.id === voteWeekId ? "selected" : ""}>${esc(fmtWeekRange(w.start_date))}${w.confirmed ? " — already decided" : ""}</option>`).join("")}
-      </select></label>
-      <button id="voteTargetSet" class="primary">Set</button>
-      <button id="voteTargetClear" class="ghost">Back to automatic</button>
-    </div>` : ""}
     ${chosenCount ? `<p class="hint">${chosenCount} already on the shortlist.</p>` : ""}
 
     ${!S.votingOpen ? `<div class="notice small warn">
@@ -2265,26 +2256,6 @@ async function viewVote() {
     </div>
 
   `;
-
-  const vtToggle = document.getElementById("voteTargetToggle");
-  const vtOptions = document.getElementById("voteTargetOptions");
-  if (vtToggle) vtToggle.onclick = () => {
-    const open = vtOptions.classList.toggle("hidden") === false;
-    vtToggle.setAttribute("aria-expanded", open ? "true" : "false");
-  };
-  const vtSet = document.getElementById("voteTargetSet");
-  if (vtSet) vtSet.onclick = busy(vtSet, async () => {
-    const week_id = +document.getElementById("voteTargetSel").value;
-    const res = await api.post("/api/week/vote-target", { week_id, actor_id: S.meId });
-    if (res.error) return toast(res.error, "bad");
-    await boot(); viewVote();
-  });
-  const vtClear = document.getElementById("voteTargetClear");
-  if (vtClear) vtClear.onclick = busy(vtClear, async () => {
-    const res = await api.post("/api/week/vote-target", { week_id: null, actor_id: S.meId });
-    if (res.error) return toast(res.error, "bad");
-    await boot(); viewVote();
-  });
 
   const reopen = document.getElementById("reopenVoting");
   if (reopen) reopen.onclick = busy(reopen, async () => {
@@ -2422,7 +2393,7 @@ function wireFinalizePanel(voteWeekId) {
     const meals_target = +document.getElementById("mealsTargetInput").value || undefined;
     const wk = S.weeks.find((w) => w.id === voteWeekId);
     if (!(await confirmDialog(
-        `Lock in ${meal_ids.length} meal${meal_ids.length === 1 ? "" : "s"} for ${weekWords(voteWeekId)} (${fmtWeekRange(wk ? wk.start_date : "")})? If that's the wrong week, cancel and use "Voting on the wrong week?" first.`,
+        `Lock in ${meal_ids.length} meal${meal_ids.length === 1 ? "" : "s"} for ${weekWords(voteWeekId)} (${fmtWeekRange(wk ? wk.start_date : "")})?`,
         { title: "Which week is this for?", okLabel: "Lock it in" }))) return;
     // Points land on finalize (server-side, tied to healthy-tagged winners) but
     // nothing about that shows up anywhere in the moment — a parent finalising
@@ -3685,7 +3656,7 @@ function receiptReview(weekId, r) {
     document.querySelectorAll(".rcSuggest").forEach((b) => (b.onclick = () => { const l = L[+b.dataset.i]; countAs(l, l.suggest); draw(); }));
     document.querySelectorAll(".rcAs").forEach((sel) => (sel.onchange = () => {
       const l = L[+sel.dataset.i]; countAs(l, sel.value);
-      const lab = sel.selectedOptions[0]?.dataset.label; if (sel.value && lab) l.name = lab;  // "Aubree's Breakfast — Crêpes"
+      const lab = sel.selectedOptions[0]?.dataset.label; if (sel.value && lab) l.name = lab;  // "Breakfast — Crêpes"
       draw();
     }));
     document.querySelectorAll(".rcUndo").forEach((b) => (b.onclick = () => { countAs(L[+b.dataset.i], null); draw(); }));

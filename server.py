@@ -108,7 +108,7 @@ def migrate(conn):
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
-        # "Pick one" extras (Aubree's breakfast: crêpes / pancakes / croissants):
+        # "Pick one" extras (a shared breakfast: crêpes / pancakes / croissants):
         # comma-separated options; one line on the list, any option counts on a receipt.
         ("extra", "options", "TEXT"),
         # A non-real "person" that ships with the example meal library so
@@ -462,36 +462,9 @@ def store_aisle_order(conn, store_id):
 
 
 def protected_week_ids(conn):
-    """Weeks that /api/bootstrap recreates the instant they're deleted.
-
-    Deleting one appeared to do nothing: the DELETE succeeded, then the UI's
-    own boot() call rebuilt the row via ensure_week() before the page redrew.
-    Mirrors bootstrap's logic exactly, but never creates anything.
-    """
-    active = conn.execute("SELECT value FROM config WHERE key='active_week_id'").fetchone()
-    arow = conn.execute("SELECT start_date FROM week WHERE id=?",
-                        (active["value"],)).fetchone() if active else None
-    this_start = date.fromisoformat(
-        arow["start_date"] if arow else week_start_of(conn, date.today()))
-
-    ids = set()
-    def note(d):
-        r = conn.execute("SELECT id, confirmed FROM week WHERE start_date=?", (d.isoformat(),)).fetchone()
-        if r:
-            ids.add(r["id"])
-        return r
-
-    note(this_start)
-    nxt = this_start + timedelta(days=7)
-    note(nxt)
-    # bootstrap walks forward from next week to the first unconfirmed one
-    d = nxt
-    for _ in range(52):
-        r = note(d)
-        if not r or not r["confirmed"]:
-            break
-        d += timedelta(days=7)
-    return ids
+    """Weeks that /api/bootstrap recreates the instant they're deleted (it would
+    rebuild them before the page redrew, so deleting looked like it did nothing)."""
+    return set(cycle(conn).values())
 
 
 def voting_open(conn, week_id):
@@ -949,7 +922,7 @@ def classify_receipt(conn, week_id, lines):
             words = name_tokens(ln["text"])
             best, best_n = None, 0
             for k in set(on_list) | meal_keys:
-                opts = " ".join((on_list.get(k) or {}).get("options") or [])  # "crêpes" -> Aubree's Breakfast
+                opts = " ".join((on_list.get(k) or {}).get("options") or [])  # "crêpes" -> Breakfast
                 n = len(words & (name_tokens(k) | name_tokens(opts.replace("ê", "e"))))
                 if n > best_n or (n == best_n and best and len(k) < len(best)):
                     best, best_n = k, n
@@ -967,7 +940,7 @@ def receipt_list_items(conn, week_id):
     out = []
     for g in build_shopping(conn, week_id):
         for i in g["items"]:
-            for o in i.get("options") or []:  # "Aubree's Breakfast — Crêpes" counts as that line
+            for o in i.get("options") or []:  # "Breakfast — Crêpes" counts as that line
                 out.append({"key": i["key"], "label": f"{i['key']} — {o}", "kind": "extra"})
     return out + [{"key": k, "kind": "meal" if k in meal_keys else "extra"} for k in sorted(keys)]
 
@@ -1177,22 +1150,43 @@ def extras_blocked(conn, me):
             and not conn.execute("SELECT 1 FROM push_sub WHERE person_id=?", (me["id"],)).fetchone())
 
 
-def shop_weeks(conn, this_id, next_id):
-    """shopWeekId: the next shop not yet done (where extras get added; this week's,
-    then next week's, then the week after once both are done).
-    shopViewWeekId: what the Shopping page opens on, never past next week, so a
-    shop you've just finished (and its receipt) stays in view."""
-    def closed(wid):
-        r = conn.execute("SELECT shop_closed FROM week WHERE id=?", (wid,)).fetchone()
-        return bool(r and r["shop_closed"])
-    if not closed(this_id):
-        open_id = this_id
-    elif not closed(next_id):
-        open_id = next_id
-    else:
-        nxt = conn.execute("SELECT start_date FROM week WHERE id=?", (next_id,)).fetchone()["start_date"]
-        open_id = ensure_week(conn, (date.fromisoformat(nxt) + timedelta(days=7)).isoformat())
-    return {"shopWeekId": open_id, "shopViewWeekId": open_id if open_id in (this_id, next_id) else next_id}
+def cycle(conn, today=None):
+    """THE week model. Every screen asks this one function, nothing else decides a week.
+
+    The household's rhythm is vote -> plan -> shop (Friday) -> eat, and next week's
+    vote overlaps this week's meals, so one calendar date maps to several weeks:
+      thisWeekId      the calendar week containing today (the week being eaten)
+      nextWeekId      the one after
+      voteWeekId      what Vote/Finalise act on: this week while its meals are still
+                      unplanned or its shop isn't done, then the first unplanned week after
+      shopWeekId      the next shop not yet done (this week's, then next's, then the
+                      following one): where Extras are added
+      shopViewWeekId  what Shopping opens on: shopWeekId, never past next week, so a
+                      shop you've just finished (and its receipt) stays in view
+    """
+    def row(wid):
+        return conn.execute("SELECT start_date, confirmed, shop_closed FROM week WHERE id=?", (wid,)).fetchone()
+
+    def after(wid):
+        return ensure_week(conn, (date.fromisoformat(row(wid)["start_date"]) + timedelta(days=7)).isoformat())
+
+    this_id = ensure_week(conn, week_start_of(conn, today or date.today()))
+    next_id = after(this_id)
+    t = row(this_id)
+    vote_id = this_id
+    if t["confirmed"] and t["shop_closed"]:
+        vote_id = next_id
+        for _ in range(52):
+            if not row(vote_id)["confirmed"]:
+                break
+            vote_id = after(vote_id)
+    shop_id = this_id
+    for _ in range(52):
+        if not row(shop_id)["shop_closed"]:
+            break
+        shop_id = after(shop_id)
+    return {"thisWeekId": this_id, "nextWeekId": next_id, "voteWeekId": vote_id,
+            "shopWeekId": shop_id, "shopViewWeekId": shop_id if shop_id in (this_id, next_id) else next_id}
 
 
 def notify_extra_ask(conn, person_id, item, request_id):
@@ -1401,65 +1395,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def api_get(self, conn, path, q):
         if path == "/api/bootstrap":
-            # "This week" is normally just whichever calendar week contains
-            # today — but the household actually shops Friday evening or
-            # Saturday morning once that week's food is eaten, not strictly
-            # on the calendar boundary. A parent can nudge "this week"
-            # forward a little early by hand (see /api/week/advance).
-            #
-            # That pin must not outlive its week, though — a household that
-            # forgets to tap it again just sat frozen on an already-elapsed
-            # week indefinitely (confirmed real: kids saw last Saturday's
-            # takeaway day still showing days later and thought it was
-            # happening again). A pin more than 7 days stale is treated as
-            # forgotten, not deliberate, and the calendar takes back over.
-            active_row = conn.execute("SELECT value FROM config WHERE key='active_week_id'").fetchone()
-            active_week = conn.execute("SELECT start_date FROM week WHERE id=?",
-                                       (active_row["value"],)).fetchone() if active_row else None
-            this_start = this_id = None
-            if active_week:
-                pinned_start = date.fromisoformat(active_week["start_date"])
-                if date.today() < pinned_start + timedelta(days=7):
-                    this_start = active_week["start_date"]
-                    this_id = int(active_row["value"])
-            if this_start is None:
-                this_start = week_start_of(conn, date.today())
-                this_id = ensure_week(conn, this_start)
-            next_start = (date.fromisoformat(this_start) + timedelta(days=7)).isoformat()
-            next_id = ensure_week(conn, next_start)
-            # Voting is next week by default — but a parent can pin it to any
-            # week (vote_week_override), for exactly the case where real time
-            # has moved past a week whose voting isn't actually finished. The
-            # "this week" pin has a 7-day staleness expiry so it can't get
-            # stuck forever; that expiry is judged against the PINNED WEEK's
-            # own date, so a fresh press can be born "stale" the moment real
-            # time reaches that week. The vote override deliberately has no
-            # such expiry — a parent setting it right now is never stale by
-            # definition — but it clears itself the moment that week is
-            # confirmed, so it can't outlive its own reason for existing.
-            # Default target: the earliest week still waiting for a plan. If
-            # this week was never confirmed (voting ran late), the meals are
-            # for THIS week — pointing votes at next week is what stranded a
-            # whole round of votes and a plan on the wrong week.
-            # Next week's vote only opens once this week is planned AND its shop
-            # is marked done — otherwise kids think they're voting/adding for
-            # the shop that's still in progress.
-            this_closed = (conn.execute("SELECT shop_closed FROM week WHERE id=?", (this_id,))
-                           .fetchone() or {"shop_closed": 0})["shop_closed"]
-            vote_id = next_id if (not voting_open(conn, this_id) and this_closed) else this_id
-            override_row = conn.execute(
-                "SELECT value FROM config WHERE key='vote_week_override'").fetchone()
-            if override_row:
-                ov_id = int(override_row["value"])
-                # A Row never equals a plain tuple, so comparing the fetched
-                # row itself to (0,) is always False — read the column, not
-                # the row.
-                ov_week = conn.execute("SELECT confirmed FROM week WHERE id=?", (ov_id,)).fetchone()
-                if ov_week and ov_week["confirmed"] == 0:
-                    vote_id = ov_id
-                else:
-                    conn.execute("DELETE FROM config WHERE key='vote_week_override'")
-            shop_ids = shop_weeks(conn, this_id, next_id)  # may create the week after next
+            ids = cycle(conn)
+            this_id, next_id, vote_id = ids["thisWeekId"], ids["nextWeekId"], ids["voteWeekId"]
+            shop_ids = {k: ids[k] for k in ("shopWeekId", "shopViewWeekId")}
             weeks = rows(conn.execute("SELECT * FROM week ORDER BY start_date DESC"))
             people = rows(conn.execute("SELECT * FROM person ORDER BY role DESC, id"))
             for p in people:
@@ -2185,35 +2123,6 @@ class Handler(SimpleHTTPRequestHandler):
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Only a parent can do that."}, 403)
             conn.execute("DELETE FROM week_meal WHERE week_id=? AND meal_id=?", (b["week_id"], b["meal_id"]))
-            conn.commit()
-            return self.send_json({"ok": True})
-
-        if path == "/api/week/vote-target":
-            # Manual override for which week Vote points at — the escape
-            # hatch for "we're voting late and the calendar's already moved
-            # on". Pass week_id: null to clear it and go back to automatic.
-            if not is_parent(conn, b.get("actor_id")):
-                return self.send_json({"error": "Only a parent can do that."}, 403)
-            if b.get("week_id"):
-                conn.execute("""INSERT INTO config(key,value) VALUES ('vote_week_override',?)
-                                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
-                             (str(int(b["week_id"])),))
-            else:
-                conn.execute("DELETE FROM config WHERE key='vote_week_override'")
-            conn.commit()
-            return self.send_json({"ok": True})
-
-        if path == "/api/week/advance":
-            # Pins "this week" forward to whichever week the parent's just
-            # shopped for — decoupled from today's actual date, since the
-            # weekly shop happens Friday evening/Saturday morning, not
-            # necessarily right on the calendar boundary.
-            # Retired: shopping on Friday for the week starting Saturday made
-            # this skip the family straight past the week they were about to
-            # eat. The calendar and the "lock list" step handle it now.
-            return self.send_json({"error": "Not needed any more — the week moves on by itself."}, 410)
-            conn.execute("""INSERT INTO config(key,value) VALUES ('active_week_id',?)
-                            ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (str(b["week_id"]),))
             conn.commit()
             return self.send_json({"ok": True})
 
