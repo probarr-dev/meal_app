@@ -108,6 +108,9 @@ def migrate(conn):
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
+        # "Pick one" extras (Aubree's breakfast: crêpes / pancakes / croissants):
+        # comma-separated options; one line on the list, any option counts on a receipt.
+        ("extra", "options", "TEXT"),
         # A non-real "person" that ships with the example meal library so
         # seed content can have a "who's it for" without hardcoding an
         # actual name — never shown at login or in Settings' Family list,
@@ -753,7 +756,8 @@ def unit_price(p):
 
 
 def item_key(name):
-    return " ".join((name or "").strip().split()).title()
+    # str.title(), except it wrongly capitalises after an apostrophe ("Aubree'S").
+    return re.sub(r"'S\b", "'s", " ".join((name or "").strip().split()).title())
 
 
 def packs_needed(amount, unit, size):
@@ -945,7 +949,8 @@ def classify_receipt(conn, week_id, lines):
             words = name_tokens(ln["text"])
             best, best_n = None, 0
             for k in set(on_list) | meal_keys:
-                n = len(words & name_tokens(k))
+                opts = " ".join((on_list.get(k) or {}).get("options") or [])  # "crêpes" -> Aubree's Breakfast
+                n = len(words & (name_tokens(k) | name_tokens(opts.replace("ê", "e"))))
                 if n > best_n or (n == best_n and best and len(k) < len(best)):
                     best, best_n = k, n
             if best and best_n >= 1:  # only a suggestion; one tap to accept or ignore
@@ -959,7 +964,12 @@ def receipt_list_items(conn, week_id):
         """SELECT mi.item FROM week_day wd JOIN meal_ingredient mi ON mi.meal_id IN (wd.meal_id, wd.lunch_meal_id)
            WHERE wd.week_id=?""", (week_id,)))}
     keys = {i["key"] for g in build_shopping(conn, week_id) for i in g["items"]} | meal_keys
-    return [{"key": k, "kind": "meal" if k in meal_keys else "extra"} for k in sorted(keys)]
+    out = []
+    for g in build_shopping(conn, week_id):
+        for i in g["items"]:
+            for o in i.get("options") or []:  # "Aubree's Breakfast — Crêpes" counts as that line
+                out.append({"key": i["key"], "label": f"{i['key']} — {o}", "kind": "extra"})
+    return out + [{"key": k, "kind": "meal" if k in meal_keys else "extra"} for k in sorted(keys)]
 
 
 def log_extra(conn, person_id, item, week_id, action):
@@ -1015,7 +1025,7 @@ def build_shopping(conn, week_id, store_id=None):
         # Different meals spell the same ingredient differently ("Grated
         # Cheese" vs "grated cheese") — normalise casing before grouping, or
         # they silently end up as two separate lines instead of summing.
-        item = " ".join(item.strip().split()).title()
+        item = item_key(item)
         key = item
         if key not in totals:
             totals[key] = {"item": item, "amount": 0, "unit": unit,
@@ -1078,6 +1088,7 @@ def build_shopping(conn, week_id, store_id=None):
             add(ing["item"], ing["amount"], ing["unit"], ing["aisle"],
                 tag=r["person"] or "everyone", meal=(r["id"], r["name"]))
 
+    options = {}
     for e in rows(conn.execute(
             """SELECT e.*, p.name AS person, COALESCE(we.qty, 1) AS qty FROM extra e
                LEFT JOIN person p ON p.id = e.person_id
@@ -1088,6 +1099,8 @@ def build_shopping(conn, week_id, store_id=None):
         # aisle, and having both meanings share a word is what made the two
         # dropdowns on the add-item row indistinguishable.
         add(e["item"], e["amount"] * e["qty"], e["unit"], e["aisle"], tag=e["person"] or "everyone")
+        if e.get("options"):
+            options[item_key(e["item"])] = [o.strip() for o in e["options"].split(",") if o.strip()]
 
     checked = {t["item"]: t["checked"]
                for t in rows(conn.execute("SELECT * FROM shop_tick WHERE week_id=?", (week_id,)))}
@@ -1096,7 +1109,7 @@ def build_shopping(conn, week_id, store_id=None):
 
     by_aisle = {}
     for key, t in totals.items():
-        t = {**t, "tags": sorted(t["tags"]), "key": key,
+        t = {**t, "tags": sorted(t["tags"]), "key": key, "options": options.get(key),
              "qty": fmt_qty(t["amount"], t["unit"]), "checked": bool(checked.get(key, 0)),
              "pantryChecked": bool(pantry_checked.get(key, 0)),
              "meals": [{"id": mid, "name": name} for mid, name in sorted(t["meals"].items(), key=lambda x: x[1])]}
@@ -2206,6 +2219,9 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/extra":
             if b.get("id"):
+                if "options" in b:
+                    conn.execute("UPDATE extra SET options=? WHERE id=?",
+                                 (",".join(o.strip() for o in (b["options"] or "").split(",") if o.strip()) or None, b["id"]))
                 conn.execute("""UPDATE extra SET item=?,aisle=?,person_id=?,recurring=?,amount=?,unit=?
                                 WHERE id=?""",
                              (b["item"], b.get("aisle", "Household"), b.get("person_id"),

@@ -1130,6 +1130,8 @@ function extraEditor(extra) {
       <label class="mini"><span>Aisle in shop</span>
         <select id="exEditAisle">${aisleOpts}</select></label>
       <label class="inline"><input type="checkbox" id="exEditRec" ${extra.recurring ? "checked" : ""}> every week</label>
+      <label class="field"><span>Pick one of (optional, comma-separated)</span>
+        <input id="exEditOpts" value="${esc(extra.options || "")}" placeholder="e.g. crêpes, pancakes, croissants"></label>
       <label class="inline"><input type="checkbox" id="exEditAdult" ${extra.adults_only ? "checked" : ""}> grown-ups only (kids won't see it)</label>
     </div>
     <div class="modal-actions"><button id="exEditDel" class="ghost danger-text">Delete forever</button><button id="exEditSave" class="primary">Save</button></div>
@@ -1154,6 +1156,7 @@ function extraEditor(extra) {
       person_id: null,
       recurring: document.getElementById("exEditRec").checked ? 1 : 0,
       adults_only: document.getElementById("exEditAdult").checked ? 1 : 0,
+      options: document.getElementById("exEditOpts").value,
     });
     closeModal();
     viewRegulars();
@@ -1221,7 +1224,7 @@ async function viewShopping() {
               <label class="row shop-row" data-key="${esc(i.key)}">
                 <input type="checkbox" class="pantryCb" data-item="${esc(i.key)}" ${i.pantryChecked ? "checked" : ""}>
                 <span class="qty">${esc(i.qty)}</span>
-                <span class="shop-item"><span class="shop-name">${esc(i.item)}</span></span>
+                <span class="shop-item"><span class="shop-name">${esc(i.item)}${i.options ? ` <span class="hint" style="display:inline">(${i.options.map(esc).join(" / ")})</span>` : ""}</span></span>
               </label>`).join("")}</div>
           </div>`).join("")}
       </div>`;
@@ -1261,7 +1264,7 @@ async function viewShopping() {
       <input type="checkbox" data-item="${esc(i.key)}" ${i.checked ? "checked" : ""}>
       <span class="qty">${esc(i.qty)}</span>
       <span class="shop-item">
-        <span class="shop-name">${esc(i.item)}</span>${i.priceLow != null ? `<span class="shop-price">£${i.priceLow.toFixed(2)}${i.priceHigh > i.priceLow ? `–${i.priceHigh.toFixed(2)}` : ""}</span>` : ""}
+        <span class="shop-name">${esc(i.item)}${i.options ? ` <span class="hint" style="display:inline">(${i.options.map(esc).join(" / ")})</span>` : ""}</span>${i.priceLow != null ? `<span class="shop-price">£${i.priceLow.toFixed(2)}${i.priceHigh > i.priceLow ? `–${i.priceHigh.toFixed(2)}` : ""}</span>` : ""}
         ${meta ? `<span class="shop-meta">${meta}</span>` : ""}
       </span>
     </label>`;
@@ -3658,7 +3661,7 @@ function receiptReview(weekId, r) {
         ${unmatched && !l.matched ? `<span class="rc-choices">
           ${l.suggest ? `<button class="rcSuggest" data-i="${i}">= ${esc(l.suggest)}?</button>` : ""}
           <select class="rcAs" data-i="${i}"><option value="">Counts as…</option>${items.map((x) =>
-            `<option value="${esc(x.key)}">${esc(x.key)}</option>`).join("")}</select>
+            `<option value="${esc(x.key)}" data-label="${esc(x.label || x.key)}">${esc(x.label || x.key)}</option>`).join("")}</select>
           ${["regular", "treat", "meal", "oneoff"].map((k) =>
             `<button class="rcPick ${l.kind === k && l.decided ? "on" : ""}" data-i="${i}" data-k="${k}">${KIND[k]}</button>`).join("")}</span>`
           : l.matched ? "" : `<span class="rc-kind">${KIND[l.kind] || ""}</span>`}
@@ -3668,7 +3671,11 @@ function receiptReview(weekId, r) {
       const l = L[+b.dataset.i]; l.kind = b.dataset.k; l.decided = true; draw();
     }));
     document.querySelectorAll(".rcSuggest").forEach((b) => (b.onclick = () => { const l = L[+b.dataset.i]; countAs(l, l.suggest); draw(); }));
-    document.querySelectorAll(".rcAs").forEach((sel) => (sel.onchange = () => { countAs(L[+sel.dataset.i], sel.value); draw(); }));
+    document.querySelectorAll(".rcAs").forEach((sel) => (sel.onchange = () => {
+      const l = L[+sel.dataset.i]; countAs(l, sel.value);
+      const lab = sel.selectedOptions[0]?.dataset.label; if (sel.value && lab) l.name = lab;  // "Aubree's Breakfast — Crêpes"
+      draw();
+    }));
     document.querySelectorAll(".rcUndo").forEach((b) => (b.onclick = () => { countAs(L[+b.dataset.i], null); draw(); }));
     document.querySelectorAll(".rcOnce").forEach((c) => (c.onchange = () => { L[+c.dataset.i].once = c.checked; }));
     const save = document.getElementById("rcSave");
