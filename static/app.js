@@ -2572,10 +2572,30 @@ async function viewSettings() {
 
     <h2 class="sec-title">Data</h2>
     <div class="card pad">
-      <p class="subtitle">You've chosen not to run backups. An export is still worth taking
-        occasionally — drop it on the Samba share and it costs nothing.</p>
-      <a class="btn-link" href="/api/export" download>Download full export (JSON)</a>
+      ${isAdmin() ? `<p class="subtitle"><strong>Full backup</strong> is everything, including passwords and sign-ins, so keep the file private.
+        Restoring it puts the app back exactly as it was and replaces what's here now.</p>
+      <a class="btn-link" href="/api/backup" download>Download full backup</a>
+      <button id="restoreBtn" class="ghost">Restore from a backup…</button>
+      <input type="file" id="restoreFile" accept=".db,application/octet-stream" hidden>
+      <p class="subtitle" style="margin-top:14px">The readable export has no passwords, for looking at or moving the data.</p>` : ""}
+      <a class="btn-link" href="/api/export" download>Download readable export (JSON)</a>
     </div>`;
+  const rb = document.getElementById("restoreBtn"), rf = document.getElementById("restoreFile");
+  if (rb) {
+    rb.onclick = () => rf.click();
+    rf.onchange = async () => {
+      const file = rf.files[0]; rf.value = "";
+      if (!file) return;
+      if (!(await confirmDialog(`Replace everything in the app with "${file.name}"? A copy of what's here now is kept on the server first. You'll be signed out and need the backup's passwords.`,
+          { okLabel: "Restore" }))) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const res = await api.post("/api/restore", { data: btoa(bin), actor_id: S.meId }).catch((e) => ({ error: e.message }));
+      if (res.error) return toast(res.error, "bad");
+      toast("Restored. Signing in again…", "good");
+      setTimeout(() => location.reload(), 1200);
+    };
+  }
 
   if (!p) return;
 

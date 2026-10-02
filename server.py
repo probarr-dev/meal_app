@@ -1729,6 +1729,17 @@ class Handler(SimpleHTTPRequestHandler):
                 WHERE deleted_at IS NULL AND meal_type LIKE '%kids_lunch%' ORDER BY name"""))
             return self.send_json({"pool": pool, "kidsLunch": kids_lunch})
 
+        if path == "/api/backup":
+            if not self.me["is_admin"]:
+                return self.send_json({"error": "Admins only."}, 403)
+            body = make_backup_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="mealplan-backup-{date.today().isoformat()}.db"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+
         if path == "/api/export":
             if not self.me["is_admin"]:
                 return self.send_json({"error": "Admins only."}, 403)
@@ -2228,6 +2239,15 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("DELETE FROM week_meal WHERE week_id=? AND meal_id=?", (b["week_id"], b["meal_id"]))
             conn.commit()
             return self.send_json({"ok": True})
+
+        if path == "/api/restore":
+            if not self.me["is_admin"]:
+                return self.send_json({"error": "Admins only."}, 403)
+            try:
+                keep = restore_from_bytes(base64.b64decode(b.get("data") or "", validate=True))
+            except Exception as e:
+                return self.send_json({"error": str(e) if isinstance(e, ValueError) else "That file couldn't be read."}, 400)
+            return self.send_json({"ok": True, "kept": os.path.basename(keep)})
 
         if path == "/api/week/unconfirm":
             if not is_parent(conn, b.get("actor_id")):
@@ -3045,6 +3065,53 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json({"error": "not found"}, 404)
 
 
+def make_backup_bytes():
+    """A complete, consistent copy of the database (everything: passwords, sign-ins, push keys),
+    taken with SQLite's own backup so it's safe while the app is running."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "backup.db")
+        src, dst = sqlite3.connect(DB_PATH), sqlite3.connect(path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close(); src.close()
+        with open(path, "rb") as f:
+            return f.read()
+
+
+def restore_from_bytes(data):
+    """Replace the whole database with a backup made by make_backup_bytes().
+    Checks it first, and keeps a copy of what it replaces beside the database."""
+    import tempfile, time as _t
+    if not data.startswith(b"SQLite format 3\x00"):
+        raise ValueError("That isn't a Meal Planner backup file.")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "restore.db")
+        with open(path, "wb") as f:
+            f.write(data)
+        chk = sqlite3.connect(path)
+        try:
+            if chk.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError("That backup file is damaged.")
+            names = {r[0] for r in chk.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"person", "week", "meal"} <= names:
+                raise ValueError("That isn't a Meal Planner backup file.")
+            keep = os.path.join(os.path.dirname(DB_PATH), f"before-restore-{_t.strftime('%Y%m%d-%H%M%S')}.db")
+            cur = sqlite3.connect(DB_PATH)
+            try:
+                with sqlite3.connect(keep) as kc:
+                    cur.backup(kc)
+                cur.close(); cur = sqlite3.connect(DB_PATH, timeout=30)
+                chk.backup(cur)  # overwrite the live database in place
+            finally:
+                cur.close()
+        finally:
+            chk.close()
+    init_db()  # an older backup gets brought up to date
+    return keep
+
+
 def cli_set_password(username):
     """Recovery / first-time setup from the server's own shell:
     python3 server.py set-password <username>"""
@@ -3069,6 +3136,11 @@ def cli_set_password(username):
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == "restore":
+        init_db()
+        with open(sys.argv[2], "rb") as f:
+            print(f"Restored. The previous database was kept as {restore_from_bytes(f.read())}")
+        raise SystemExit
     if len(sys.argv) >= 3 and sys.argv[1] == "set-password":
         init_db()
         cli_set_password(sys.argv[2])
