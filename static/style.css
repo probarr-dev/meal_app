@@ -1470,3 +1470,7 @@ body[data-tab="compare"] main { max-width:1150px; }
   border:2px solid var(--accent);
 }
 .big-action:active { background:color-mix(in srgb, var(--accent) 15%, var(--card)); }
+
+.rc-as { display:block; font-size:.85rem; margin-top:2px; }
+.rc-as .link-toggle { margin-left:6px; }
+.rc-choices select { font-size:16px; max-width:100%; }

@@ -3627,29 +3627,50 @@ function receiptFlow() {
   });
 }
 function receiptReview(weekId, r) {
-  const L = r.lines;
+  const L = r.lines, items = r.listItems || [];
   const KIND = { meal: "🍽️ Meal", extra: "🛒 Extra", treat: "🍭 Treat", oneoff: "↩️ One-off", regular: "🔁 Regular" };
+  const kindOf = (key) => (items.find((x) => x.key === key) || {}).kind || "extra";
+  // "Counts as": a substitute (different product code) standing in for a list item.
+  const countAs = (l, key) => {
+    if (!key) { Object.assign(l, { item_key: null, name: l.text, kind: "treat", decided: false, matched: false, once: false }); return; }
+    Object.assign(l, { item_key: key, name: key, kind: kindOf(key), decided: true, matched: true });
+  };
   const draw = () => {
     const sum = (k) => L.filter((l) => l.kind === k || (k === "extra" && l.kind === "regular")).reduce((s, l) => s + l.amount, 0);
     const open = L.filter((l) => l.undecided && !l.decided);
     const off = r.total != null && Math.abs(r.total - r.sum) > 0.01;
+    const linked = L.filter((l) => l.item_key).length;
     document.getElementById("modalBody").innerHTML = `
       <div class="notice small ${off ? "warn" : "good"}">${off
         ? `⚠️ Lines add up to £${r.sum.toFixed(2)} but the receipt says £${r.total.toFixed(2)} — a line may have been misread.`
         : `✓ ${r.items} items, £${(r.total ?? r.sum).toFixed(2)} — all lines read.`}</div>
-      <div class="rc-summary">🍽️ £${sum("meal").toFixed(2)} · 🛒 £${sum("extra").toFixed(2)} · 🍭 £${sum("treat").toFixed(2)}${sum("oneoff") ? ` · ↩️ £${sum("oneoff").toFixed(2)}` : ""}</div>
-      ${open.length ? `<h4>Not on your list (${open.length}) — what were they?</h4>` : ""}
-      <div class="rc-lines">${L.map((l, i) => `<div class="rc-line ${l.undecided && !l.decided ? "open" : ""}">
-        <span class="rc-name">${l.qty > 1 ? `${l.qty} × ` : ""}${esc(l.name)}${l.remembered ? ` <span class="hint" style="display:inline">(remembered)</span>` : ""}</span>
+      <div class="rc-summary">🍽️ £${sum("meal").toFixed(2)} · 🛒 £${sum("extra").toFixed(2)} · 🍭 £${sum("treat").toFixed(2)}${sum("oneoff") ? ` · ↩️ £${sum("oneoff").toFixed(2)}` : ""}
+        <span class="hint" style="display:block">${linked} of ${L.length} lines matched to your list</span></div>
+      ${open.length ? `<h4>Not matched (${open.length}): a substitute for something on your list, or extra?</h4>` : ""}
+      <div class="rc-lines">${L.map((l, i) => {
+        const unmatched = (!l.item_key || l.matched) && !l.deposit;
+        return `<div class="rc-line ${l.undecided && !l.decided ? "open" : ""}">
+        <span class="rc-name">${l.qty > 1 ? `${l.qty} × ` : ""}${esc(l.matched ? l.text : l.name)}${l.remembered ? ` <span class="hint" style="display:inline">(remembered)</span>` : ""}
+          ${l.matched ? `<span class="rc-as">= <strong>${esc(l.item_key)}</strong>
+            <label class="hint" style="display:inline"><input type="checkbox" class="rcOnce" data-i="${i}" ${l.once ? "checked" : ""}> just this once</label>
+            <button class="rcUndo link-toggle" data-i="${i}">change</button></span>` : ""}</span>
         <span class="rc-amt">£${l.amount.toFixed(2)}</span>
-        ${l.undecided || l.decided ? `<span class="rc-choices">${["regular", "treat", "meal", "oneoff"].map((k) =>
-          `<button class="rcPick ${l.kind === k && l.decided ? "on" : ""}" data-i="${i}" data-k="${k}">${KIND[k]}</button>`).join("")}</span>`
-          : `<span class="rc-kind">${KIND[l.kind] || ""}</span>`}
-      </div>`).join("")}</div>
+        ${unmatched && !l.matched ? `<span class="rc-choices">
+          ${l.suggest ? `<button class="rcSuggest" data-i="${i}">= ${esc(l.suggest)}?</button>` : ""}
+          <select class="rcAs" data-i="${i}"><option value="">Counts as…</option>${items.map((x) =>
+            `<option value="${esc(x.key)}">${esc(x.key)}</option>`).join("")}</select>
+          ${["regular", "treat", "meal", "oneoff"].map((k) =>
+            `<button class="rcPick ${l.kind === k && l.decided ? "on" : ""}" data-i="${i}" data-k="${k}">${KIND[k]}</button>`).join("")}</span>`
+          : l.matched ? "" : `<span class="rc-kind">${KIND[l.kind] || ""}</span>`}
+      </div>`; }).join("")}</div>
       <button id="rcSave" class="plan-done-btn" style="position:static;margin-top:12px">Save receipt${open.length ? ` (${open.length} left as treats)` : ""}</button>`;
     document.querySelectorAll(".rcPick").forEach((b) => (b.onclick = () => {
       const l = L[+b.dataset.i]; l.kind = b.dataset.k; l.decided = true; draw();
     }));
+    document.querySelectorAll(".rcSuggest").forEach((b) => (b.onclick = () => { const l = L[+b.dataset.i]; countAs(l, l.suggest); draw(); }));
+    document.querySelectorAll(".rcAs").forEach((sel) => (sel.onchange = () => { countAs(L[+sel.dataset.i], sel.value); draw(); }));
+    document.querySelectorAll(".rcUndo").forEach((b) => (b.onclick = () => { countAs(L[+b.dataset.i], null); draw(); }));
+    document.querySelectorAll(".rcOnce").forEach((c) => (c.onchange = () => { L[+c.dataset.i].once = c.checked; }));
     const save = document.getElementById("rcSave");
     save.onclick = busy(save, async () => {
       const res = await api.post("/api/receipt/save", { actor_id: S.meId, week_id: weekId, lines: L, total: r.total ?? r.sum });

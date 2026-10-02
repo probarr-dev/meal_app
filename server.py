@@ -784,16 +784,25 @@ def price_links(conn):
 def add_estimate(conn, groups):
     """Attach a price range per shopping item and a whole-shop estimate."""
     links = price_links(conn)
+    receipt_tables(conn)
+    paid = {}
+    for r in conn.execute("""SELECT rl.item_key, rl.amount FROM receipt_line rl JOIN receipt rc ON rc.id=rl.receipt_id
+                             WHERE rl.item_key IS NOT NULL ORDER BY rc.id DESC"""):
+        if len(paid.setdefault(r["item_key"], [])) < 4:
+            paid[r["item_key"]].append(r["amount"])
     low = high = 0.0
     unpriced = []
     for g in groups:
         for i in g["items"]:
             prods = [p for p in links.get(i["key"], []) if not p["missing"]]
-            if not prods:
+            if not prods and paid.get(i["key"]):
+                prods = []  # no Aldi link, but receipts show what it cost
+            elif not prods:
                 if not i.get("pantryChecked"):
                     unpriced.append(i["item"])
                 continue
             costs = [packs_needed(i["amount"], i["unit"], p["size"]) * p["price"] for p in prods]
+            costs += paid.get(i["key"], [])  # what receipts say it actually cost lately
             i["priceLow"], i["priceHigh"] = round(min(costs), 2), round(max(costs), 2)
             if not i.get("pantryChecked"):
                 low += min(costs); high += max(costs)
@@ -930,7 +939,27 @@ def classify_receipt(conn, week_id, lines):
             ln["kind"] = learned[ln["code"]]["kind"]; ln["remembered"] = True
         else:
             ln["kind"] = "treat"; ln["undecided"] = True
+        if not key:
+            # A substitute (5% mince instead of the Angus one): suggest the list item
+            # it most likely stands in for, by shared words ("beef", "minc").
+            words = name_tokens(ln["text"])
+            best, best_n = None, 0
+            for k in set(on_list) | meal_keys:
+                n = len(words & name_tokens(k))
+                if n > best_n or (n == best_n and best and len(k) < len(best)):
+                    best, best_n = k, n
+            if best and best_n >= 1:  # only a suggestion; one tap to accept or ignore
+                ln["suggest"] = best
     return lines
+
+
+def receipt_list_items(conn, week_id):
+    """This week's list, for the receipt's "Counts as…" picker: [(key, kind)]."""
+    meal_keys = {item_key(r["item"]) for r in rows(conn.execute(
+        """SELECT mi.item FROM week_day wd JOIN meal_ingredient mi ON mi.meal_id IN (wd.meal_id, wd.lunch_meal_id)
+           WHERE wd.week_id=?""", (week_id,)))}
+    keys = {i["key"] for g in build_shopping(conn, week_id) for i in g["items"]} | meal_keys
+    return [{"key": k, "kind": "meal" if k in meal_keys else "extra"} for k in sorted(keys)]
 
 
 def log_extra(conn, person_id, item, week_id, action):
@@ -2409,7 +2438,8 @@ class Handler(SimpleHTTPRequestHandler):
             lines = classify_receipt(conn, b["week_id"], lines)
             s_ = round(sum(l["amount"] for l in lines), 2)
             n_ = sum(l["qty"] for l in lines if not l.get("deposit"))
-            return self.send_json({"lines": lines, "total": total, "count": count, "sum": s_, "items": n_})
+            return self.send_json({"lines": lines, "total": total, "count": count, "sum": s_, "items": n_,
+                                   "listItems": receipt_list_items(conn, b["week_id"])})
 
         if path == "/api/receipt/save":
             if not is_parent(conn, b.get("actor_id")):
@@ -2423,12 +2453,12 @@ class Handler(SimpleHTTPRequestHandler):
             for l in lines:
                 conn.execute("INSERT INTO receipt_line VALUES (?,?,?,?,?,?,?)",
                              (rid, l["code"], l["text"], l["qty"], l["amount"], l.get("item_key"), l["kind"]))
-                if l.get("decided"):  # remember the choice for this product next time
+                if l.get("decided") and not l.get("once"):  # remember the choice for this product next time
                     conn.execute("""INSERT INTO receipt_code(code,item_key,kind,name) VALUES (?,?,?,?)
                                     ON CONFLICT(code) DO UPDATE SET kind=excluded.kind,
                                     item_key=COALESCE(excluded.item_key, receipt_code.item_key), name=excluded.name""",
                                  (l["code"], l.get("item_key"), l["kind"] if l["kind"] != "regular" else "extra", l.get("name")))
-                if l["kind"] == "regular" and l.get("decided"):
+                if l["kind"] == "regular" and l.get("decided") and not l.get("once"):
                     nm = l.get("name") or l["text"].title()
                     ex = conn.execute("SELECT id FROM extra WHERE item=? COLLATE NOCASE", (nm,)).fetchone()
                     if ex:
