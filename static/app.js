@@ -638,6 +638,7 @@ async function boot() {
   S.thisWeekId = b.thisWeekId;
   S.nextWeekId = b.nextWeekId;
   S.shopWeekId = b.shopWeekId || b.thisWeekId;
+  S.shopViewWeekId = b.shopViewWeekId || S.shopWeekId;
   S.voteWeekId = b.voteWeekId;
   S.votingOpen = b.votingOpen;
   S.weekStartDow = b.weekStartDow ?? 5;
@@ -690,7 +691,7 @@ function route() {
   // Shopping always opens on the shop week (see shopWeekId); other pages go back to
   // the week you were on. The This/Next toggle still overrides while you're there.
   if (tab !== S.lastTab) {
-    if (tab === "shopping" && S.shopWeekId) { S.weekBeforeShop = S.weekId; S.weekId = S.shopWeekId; }
+    if (tab === "shopping" && S.shopViewWeekId) { S.weekBeforeShop = S.weekId; S.weekId = S.shopViewWeekId; }
     else if (S.lastTab === "shopping" && S.weekBeforeShop) { S.weekId = S.weekBeforeShop; S.weekBeforeShop = null; }
     S.lastTab = tab;
     document.querySelectorAll("#weekToggle button").forEach((b) =>
@@ -1837,7 +1838,7 @@ async function viewRegulars() {
     }
     try {
       await api.post("/api/extra/set-qty", { week_id: weekId, id: +b.dataset.id, qty: +b.dataset.qty, by: S.meId });
-    } catch (err) { toast(OFFLINE_MSG, "bad"); return false; }
+    } catch (err) { toast(/reach the server/.test(err.message) ? OFFLINE_MSG : err.message, "bad"); return false; }
   });
   keepUnderFinger(".del", async (b) => {
     if (!(await confirmDialog('Delete this forever from your household list? (Use − instead if you just don\'t want it this week.)',

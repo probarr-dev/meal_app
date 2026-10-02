@@ -1177,6 +1177,24 @@ def extras_blocked(conn, me):
             and not conn.execute("SELECT 1 FROM push_sub WHERE person_id=?", (me["id"],)).fetchone())
 
 
+def shop_weeks(conn, this_id, next_id):
+    """shopWeekId: the next shop not yet done (where extras get added; this week's,
+    then next week's, then the week after once both are done).
+    shopViewWeekId: what the Shopping page opens on, never past next week, so a
+    shop you've just finished (and its receipt) stays in view."""
+    def closed(wid):
+        r = conn.execute("SELECT shop_closed FROM week WHERE id=?", (wid,)).fetchone()
+        return bool(r and r["shop_closed"])
+    if not closed(this_id):
+        open_id = this_id
+    elif not closed(next_id):
+        open_id = next_id
+    else:
+        nxt = conn.execute("SELECT start_date FROM week WHERE id=?", (next_id,)).fetchone()["start_date"]
+        open_id = ensure_week(conn, (date.fromisoformat(nxt) + timedelta(days=7)).isoformat())
+    return {"shopWeekId": open_id, "shopViewWeekId": open_id if open_id in (this_id, next_id) else next_id}
+
+
 def notify_extra_ask(conn, person_id, item, request_id):
     """Tell the parents when a child asks for something (parents' own adds are silent).
     Each request gets its own notification (unique tag) with Approve / Say no buttons."""
@@ -1441,6 +1459,7 @@ class Handler(SimpleHTTPRequestHandler):
                     vote_id = ov_id
                 else:
                     conn.execute("DELETE FROM config WHERE key='vote_week_override'")
+            shop_ids = shop_weeks(conn, this_id, next_id)  # may create the week after next
             weeks = rows(conn.execute("SELECT * FROM week ORDER BY start_date DESC"))
             people = rows(conn.execute("SELECT * FROM person ORDER BY role DESC, id"))
             for p in people:
@@ -1455,7 +1474,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # THE shop week, used by everything shopping-related: this week's until
                 # its shop is marked done, then next week's (you shop Friday for the
                 # week that starts Saturday).
-                "shopWeekId": next_id if this_closed else this_id,
+                **shop_ids,
                 # Once everything on this week's list is in the trolley, the
                 # week in hand is finished with — anything added from then on
                 # is for the next shop, not this one.
