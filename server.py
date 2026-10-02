@@ -1078,12 +1078,14 @@ def build_week(conn, week_id, viewer_id=None):
 
 # ---------------------------------------------------------------- http
 
-def notify_extra_ask(conn, person_id, item):
-    """Tell the parents when a child asks for something (parents' own adds are silent)."""
+def notify_extra_ask(conn, person_id, item, request_id):
+    """Tell the parents when a child asks for something (parents' own adds are silent).
+    Each request gets its own notification (unique tag) with Approve / Say no buttons."""
     who = conn.execute("SELECT name, role FROM person WHERE id=?", (person_id,)).fetchone()
     if who and who["role"] != "parent":
         push.notify(conn, db, push.people(conn, role="parent"), "extra_request",
-                    f"{who['name']} asked for {item}", "Tap to approve or say no.", "/#/extras")
+                    f"{who['name']} asked for {item}", "Tap to see it, or approve straight from here.", "/#/extras",
+                    extra={"tag": f"extra_request-{request_id}", "requestId": request_id})
 
 
 # Never sent to the browser or put in an export.
@@ -1365,6 +1367,13 @@ class Handler(SimpleHTTPRequestHandler):
                     "SELECT value FROM config WHERE key='allow_historic_edits'").fetchone()
                     or {"value": "0"})["value"] == "1",
             })
+
+        if path == "/api/extra-request":
+            # One request, for the approve box a notification opens.
+            r = conn.execute("""SELECT er.id, er.item, er.amount, er.status, p.name AS person
+                                FROM extra_request er JOIN person p ON p.id=er.person_id WHERE er.id=?""",
+                             (int(q["id"][0]),)).fetchone()
+            return self.send_json({"request": dict(r) if r else None})
 
         if path == "/api/push/state":
             pid = int(q.get("person_id", ["0"])[0] or 0)
@@ -2130,13 +2139,13 @@ class Handler(SimpleHTTPRequestHandler):
             item = (b.get("item") or "").strip()
             if not item:
                 return self.send_json({"error": "Needs a name."}, 400)
-            conn.execute("""INSERT INTO extra_request(person_id,item,amount,unit,aisle,week_id)
+            rid = conn.execute("""INSERT INTO extra_request(person_id,item,amount,unit,aisle,week_id)
                             VALUES (?,?,?,?,?,?)""",
                          (b["person_id"], item, float(b.get("amount") or 1),
                           b.get("unit") or "unit", b.get("aisle") or "Household", b["week_id"]))
             log_extra(conn, b["person_id"], item, b["week_id"], "asked for")
             conn.commit()
-            notify_extra_ask(conn, b["person_id"], item)
+            notify_extra_ask(conn, b["person_id"], item, rid.lastrowid)
             return self.send_json({"ok": True})
 
         if path == "/api/extra-request/resolve":
@@ -2474,13 +2483,13 @@ class Handler(SimpleHTTPRequestHandler):
             elif pend:
                 conn.execute("UPDATE extra_request SET amount=? WHERE id=?", (qty, pend["id"]))
             elif qty:
-                conn.execute("""INSERT INTO extra_request(person_id,item,amount,unit,aisle,week_id)
+                rid = conn.execute("""INSERT INTO extra_request(person_id,item,amount,unit,aisle,week_id)
                                 VALUES (?,?,?,?,?,?)""",
                              (b["person_id"], ex["item"], qty, ex["unit"], ex["aisle"], b["week_id"]))
             log_extra(conn, b["person_id"], ex["item"], b["week_id"], f"asked for {qty}" if qty else "cancelled ask")
             conn.commit()
             if qty and not pend:  # a new ask, not +/- on one that's already waiting
-                notify_extra_ask(conn, b["person_id"], ex["item"])
+                notify_extra_ask(conn, b["person_id"], ex["item"], rid.lastrowid)
             return self.send_json({"ok": True, "qty": qty})
 
         if path == "/api/extra/set-qty":

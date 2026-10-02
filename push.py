@@ -132,7 +132,7 @@ def _deliver(db, subs, message):
                 print(f"push to person {s['person_id']} failed: {e}", flush=True)
 
 
-def notify(conn, db, person_ids, kind, title, body, url="/"):
+def notify(conn, db, person_ids, kind, title, body, url="/", extra=None):
     """Send to everyone listed who hasn't switched this kind off. Returns how many devices."""
     if not AVAILABLE or not person_ids:
         return 0
@@ -143,7 +143,7 @@ def notify(conn, db, person_ids, kind, title, body, url="/"):
         AND NOT EXISTS (SELECT 1 FROM push_off o WHERE o.person_id=s.person_id AND o.kind=?)""",
         (*ids, kind))]
     if subs:
-        msg = json.dumps({"title": title, "body": body, "url": url, "tag": kind}).encode()
+        msg = json.dumps({"title": title, "body": body, "url": url, "tag": kind, **(extra or {})}).encode()
         threading.Thread(target=_deliver, args=(db, subs, msg), daemon=True).start()
     return len(subs)
 

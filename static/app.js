@@ -654,6 +654,13 @@ async function boot() {
     return;
   }
   if (!boot.celebrated) { boot.celebrated = true; celebrateNewPoints(S.meId); }
+  // Opened by tapping a notification (app wasn't running): handle ?req= once, then tidy the URL.
+  if (!boot.notified && new URLSearchParams(location.search).get("req")) {
+    boot.notified = true;
+    const url = location.href;
+    history.replaceState(null, "", location.pathname + location.hash);
+    setTimeout(() => openFromNotification(url), 300);
+  }
 
   S.thisWeekId = b.thisWeekId;
   S.nextWeekId = b.nextWeekId;
@@ -3563,7 +3570,40 @@ function receiptReview(weekId, r) {
   };
   draw();
 }
-if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+if ("serviceWorker" in navigator && isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  // A tapped notification on an already-open app: the service worker asks us to go there.
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type === "open") openFromNotification(e.data.url);
+  });
+}
+
+// Notification taps arrive as "/?req=12#/extras": go to the page, and for a
+// child's request show an Approve / Say no box straight away.
+function openFromNotification(url) {
+  const u = new URL(url, location.origin);
+  if (u.hash && u.hash !== location.hash) location.hash = u.hash;
+  const req = +u.searchParams.get("req");
+  if (req && isParent()) showRequestBox(req);
+}
+async function showRequestBox(id) {
+  let r;
+  try { r = (await api.get(`/api/extra-request?id=${id}`)).request; } catch { return; }
+  if (!r) return;
+  if (r.status !== "pending") return toast(`${r.person}'s ${r.item} was already ${r.status}.`);
+  openModal(`${r.person} asked for`, `
+    <p style="font-size:1.3rem;font-weight:700;margin:4px 0 16px">${esc(r.item)}${r.amount > 1 ? ` × ${r0(r.amount)}` : ""}</p>
+    <div class="modal-actions"><button id="reqNo" class="ghost">Say no</button><button id="reqYes" class="primary">Approve</button></div>`);
+  const go = (decision) => async () => {
+    try {
+      await api.post("/api/extra-request/resolve", { id, decision, resolver_id: S.meId });
+      closeModal(); toast(decision === "approve" ? `Added ${r.item} to the list.` : `Said no to ${r.item}.`, "good");
+      route();
+    } catch (e) { toast(e.message, "bad"); }
+  };
+  document.getElementById("reqYes").onclick = go("approve");
+  document.getElementById("reqNo").onclick = go("deny");
+}
 
 // ---- Push notifications (per device, per person) ----
 function b64uToBytes(s) {
