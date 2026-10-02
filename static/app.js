@@ -2151,7 +2151,8 @@ async function viewVote() {
       <span class="hint">Still to vote · tap to remind</span>
       ${picks.filter((x) => x.id !== S.meId && x.used < target).map((x) => `<button class="remindOne ghost" data-id="${x.id}" data-name="${esc(x.name)}" ${x.notifiable ? "" : `title="Hasn't turned notifications on"`}>🔔 ${esc(x.name)} · ${target - x.used} left${x.notifiable ? "" : " 🔕"}</button>`).join("")}
     </div>` : ""}
-    ${S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
+    ${parent && S.voteFinalizeOpen ? `<div class="votes-left" id="pickCount"></div>`
+      : S.meId && S.votingOpen ? `<div class="votes-left ${likedCount >= target ? "done" : ""}">${likedCount >= target ? "✓ All picks used" : `<strong>${target - likedCount}</strong> of ${target} picks left`}</div>` : ""}
     ${parent ? `<div class="add-options hidden" id="voteTargetOptions">
       <label class="mini"><span>Vote on</span>
         <select id="voteTargetSel">${S.weeks
@@ -2351,6 +2352,18 @@ function renderFinalizePanel(tally, target) {
 function wireFinalizePanel(voteWeekId) {
   const btn = document.getElementById("finalizeBtn");
   if (!btn) return;
+  // Floating "5 of 7 picked" while ticking the shortlist.
+  const pc = document.getElementById("pickCount");
+  const tgt = document.getElementById("mealsTargetInput");
+  const count = () => {
+    if (!pc) return;
+    const n = document.querySelectorAll(".finalizeCb:checked").length, t = +tgt.value || 0;
+    pc.innerHTML = `<strong>${n}</strong> of ${t} meals picked`;
+    pc.classList.toggle("done", n >= t && t > 0);
+  };
+  document.querySelectorAll(".finalizeCb").forEach((c) => c.addEventListener("change", count));
+  tgt?.addEventListener("input", count);
+  count();
   btn.onclick = busy(btn, async () => {
     const meal_ids = [...document.querySelectorAll(".finalizeCb:checked")].map((c) => +c.dataset.id);
     const meals_target = +document.getElementById("mealsTargetInput").value || undefined;
