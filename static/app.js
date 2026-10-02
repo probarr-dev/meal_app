@@ -1477,7 +1477,7 @@ async function viewShopping() {
     g.aisle.toUpperCase() + "\n" + g.items.map((i) => `  ${i.qty}  ${i.item}`).join("\n")).join("\n\n");
 
   const scanBtn = document.getElementById("scanReceiptBtn");
-  if (scanBtn) scanBtn.onclick = () => receiptFlow(S.weekId);
+  if (scanBtn) scanBtn.onclick = () => receiptFlow();
   const rs = document.getElementById("receiptSummary");
   if (rs) api.post("/api/receipt/summary", { week_id: S.weekId }).then(({ summary }) => {
     if (!summary) return;
@@ -3592,8 +3592,16 @@ function sameAmountVerdict(a, matches) {
 // Text comes from the phone's own Live Text (photo → select text → copy), so
 // no OCR library and the photo never leaves the phone. Lines are matched by
 // Aldi's product code; anything not on this week's list starts as a treat.
-function receiptFlow(weekId) {
+function receiptFlow() {
+  // A receipt belongs to the shop just done, which is usually NEXT week's (you shop
+  // Friday for the week starting Saturday), not the week on screen. Default to the
+  // newest week whose shop is marked done; let the parent change it.
+  const wk = (id) => S.weeks.find((w) => w.id === id) || {};
+  const choices = [S.nextWeekId, S.thisWeekId].filter(Boolean);
+  const def = choices.find((id) => wk(id).shop_closed) || S.weekId;
   openModal("Scan receipt", `
+    <label class="field"><span>Which shop is this?</span>
+      <select id="rcWeek">${choices.map((id) => `<option value="${id}" ${id === def ? "selected" : ""}>${esc(fmtWeekRange(wk(id).start_date || ""))} (${weekWords(id)})</option>`).join("")}</select></label>
     <ol class="install-steps" style="font-size:.9rem;margin-top:0">
       <li>Open the <strong>Camera</strong> and point it at the receipt (or take a photo).</li>
       <li>Tap the <strong>text icon</strong> ▤ in the corner, then <strong>Select All → Copy</strong>.</li>
@@ -3602,6 +3610,7 @@ function receiptFlow(weekId) {
     <button id="rcRead" class="plan-done-btn" style="position:static;margin-top:10px">Read receipt</button>`);
   const go = document.getElementById("rcRead");
   go.onclick = busy(go, async () => {
+    const weekId = +document.getElementById("rcWeek").value;
     const r = await api.post("/api/receipt/parse", { actor_id: S.meId, week_id: weekId, text: document.getElementById("rcText").value })
       .catch((e) => ({ error: e.message }));
     if (r.error) return toast(r.error, "bad");
