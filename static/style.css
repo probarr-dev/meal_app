@@ -1474,3 +1474,5 @@ body[data-tab="compare"] main { max-width:1150px; }
 .rc-as { display:block; font-size:.85rem; margin-top:2px; }
 .rc-as .link-toggle { margin-left:6px; }
 .rc-choices select { font-size:16px; max-width:100%; }
+
+#receiptSummary .rcKind { padding:6px 10px; border-radius:999px; margin:3px 2px; font-size:.9rem; }

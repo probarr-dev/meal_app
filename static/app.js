@@ -1495,8 +1495,19 @@ async function viewShopping() {
   if (rs) api.post("/api/receipt/summary", { week_id: S.weekId }).then(({ summary }) => {
     if (!summary) return;
     const b = summary.by, f = (k) => (b[k] ? `£${b[k].toFixed(2)}` : "£0");
-    rs.innerHTML = `🧾 🍽️ Meals ${f("meal")} · 🛒 Extras ${f("extra")} · 🍭 Treats ${f("treat")}${b.oneoff ? ` · ↩️ One-offs ${f("oneoff")}` : ""}`;
+    const LABEL = { meal: "🍽️ Meals", extra: "🛒 Extras", treat: "🍭 Treats", oneoff: "↩️ One-offs" };
+    const ofKind = (k) => summary.lines.filter((l) => l.kind === k || (k === "extra" && l.kind === "regular"));
+    rs.innerHTML = `🧾 ${["meal", "extra", "treat", "oneoff"].filter((k) => k !== "oneoff" || b.oneoff).map((k) =>
+      `<button class="rcKind" data-k="${k}">${LABEL[k]} £${ofKind(k).reduce((s, l) => s + l.amount, 0).toFixed(2)}</button>`).join(" ")}`;
     rs.hidden = false;
+    rs.querySelectorAll(".rcKind").forEach((btn) => (btn.onclick = () => {
+      const k = btn.dataset.k, ls = ofKind(k);
+      openModal(`${LABEL[k]} · £${ls.reduce((s, l) => s + l.amount, 0).toFixed(2)}`, ls.length
+        ? `<div class="rc-lines">${ls.map((l) => `<div class="rc-line"><span class="rc-name">${l.qty > 1 ? `${l.qty} × ` : ""}${esc(l.item_key || l.text)}${
+            l.item_key && l.item_key.toUpperCase() !== l.text ? ` <span class="hint" style="display:inline">(${esc(l.text)})</span>` : ""}</span>
+            <span class="rc-amt">£${l.amount.toFixed(2)}</span></div>`).join("")}</div>`
+        : `<p class="empty">Nothing in this group.</p>`);
+    }));
   }).catch(() => {});
   const shopTotalBtn = document.getElementById("shopTotalBtn");
   if (shopTotalBtn) shopTotalBtn.onclick = busy(shopTotalBtn, async () => {

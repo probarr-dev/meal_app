@@ -1187,6 +1187,8 @@ def notify_extra_ask(conn, person_id, item, request_id):
                     extra={"tag": f"extra_request-{request_id}", "requestId": request_id})
 
 
+READ_ONLY_POSTS = {"/api/receipt/summary", "/api/receipt/parse", "/api/compare/list"}
+
 # Never sent to the browser or put in an export.
 SECRET_PERSON_FIELDS = ("pw_hash", "failed_logins", "locked_until", "pin_hash", "pin_default", "link_token")
 
@@ -1295,7 +1297,10 @@ class Handler(SimpleHTTPRequestHandler):
                 if "person_id" in body and (me["role"] != "parent" or u.path.startswith("/api/push/")):
                     body["person_id"] = me["id"]
                 global DATA_VERSION
-                DATA_VERSION += 1
+                # Read-only POSTs mustn't tell open screens to reload: the receipt
+                # summary bar did, so every screen reloaded, re-fetched, reloaded…
+                if u.path not in READ_ONLY_POSTS:
+                    DATA_VERSION += 1
                 return self.api_post(conn, u.path, body)
         except (KeyError, ValueError, IndexError):
             return self.send_json({"error": "That request was missing something or malformed."}, 400)
@@ -2493,7 +2498,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"summary": None})
             by = {k["kind"]: k["s"] for k in rows(conn.execute(
                 "SELECT kind, ROUND(SUM(amount),2) s FROM receipt_line WHERE receipt_id=? GROUP BY kind", (r["id"],)))}
-            return self.send_json({"summary": {"total": r["total"], "by": by}})
+            lines = rows(conn.execute("""SELECT text, qty, amount, item_key, kind FROM receipt_line
+                                         WHERE receipt_id=? ORDER BY amount DESC""", (r["id"],)))
+            return self.send_json({"summary": {"total": r["total"], "by": by, "lines": lines}})
 
         if path == "/api/compare/pick":
             if not is_parent(conn, b.get("actor_id")):
