@@ -105,6 +105,9 @@ def migrate(conn):
         ("extra", "adults_only", "INTEGER DEFAULT 0"),
         ("meal", "no_ingredients", "INTEGER DEFAULT 0"),
         ("price_product", "store", "TEXT DEFAULT 'aldi'"),
+        # Set = this product prices one "counts as" receipt product (e.g. a cheaper loaf
+        # bought as "Sliced Bread"), shown under that item's expandable row.
+        ("price_product", "variant_code", "TEXT"),
         # NULL = every tab (the historical default, and every non-admin
         # today). Set = only these tabs show for that person.
         ("person", "allowed_tabs", "TEXT"),
@@ -1493,14 +1496,36 @@ class Handler(SimpleHTTPRequestHandler):
             for r in rows(conn.execute("SELECT item FROM extra")):
                 items.setdefault(item_key(r["item"]), set()).add("Extras")
             links = price_links(conn)
+            receipt_tables(conn)
+            # Receipt products that "count as" an item but aren't one of its linked Aldi products.
+            skus = {}
+            for r in conn.execute("SELECT item_key, sku FROM price_product WHERE COALESCE(store,'aldi')='aldi'"):
+                skus.setdefault(r["item_key"], set()).update({r["sku"].lstrip("0"), r["sku"].lstrip("0")[:6]})
+            counted = {}
+            for r in conn.execute("""SELECT item_key, code, text, qty, amount FROM receipt_line
+                                     WHERE item_key IS NOT NULL AND code IS NOT NULL AND code!='' ORDER BY rowid"""):
+                if r["code"].lstrip("0") in skus.get(r["item_key"], ()):
+                    continue
+                v = counted.setdefault(r["item_key"], {}).setdefault(
+                    r["code"], {"name": (r["text"] or r["code"]).title(), "times": 0, "unit": []})
+                v["times"] += 1
+                v["unit"].append(round(r["amount"] / max(r["qty"] or 1, 1), 2))
             out = []
             for k in sorted(items):
                 if not k:
                     continue
-                prods = links.get(k, [])
+                prods = [p for p in links.get(k, []) if not p.get("variant_code")]
                 live = [p["price"] for p in prods if not p["missing"]]
+                variants = []
+                for code, v in counted.get(k, {}).items():
+                    vp = [p for p in links.get(k, []) if p.get("variant_code") == code]
+                    prices = [p["price"] for p in vp if not p["missing"]] or v["unit"]
+                    variants.append({"code": code, "name": v["name"], "times": v["times"], "paid": v["unit"],
+                                     "products": vp, "low": min(prices), "high": max(prices)})
+                allp = live + [x for v in variants for x in (v["low"], v["high"])]
                 out.append({"key": k, "meals": sorted(items[k]), "products": prods, "uses": uses.get(k, []),
-                            "low": min(live) if live else None, "high": max(live) if live else None})
+                            "variants": sorted(variants, key=lambda v: v["name"]),
+                            "low": min(allp) if allp else None, "high": max(allp) if allp else None})
             last = conn.execute("SELECT MAX(checked_at) c FROM price_product").fetchone()["c"]
             return self.send_json({"items": out, "lastChecked": last})
 
@@ -1509,7 +1534,7 @@ class Handler(SimpleHTTPRequestHandler):
                 aldi_sku TEXT, store TEXT, sku TEXT, name TEXT, size TEXT, price REAL, score REAL,
                 rank INTEGER, checked_at TEXT, picked INTEGER DEFAULT 0, PRIMARY KEY (aldi_sku, store, rank))""")
             src = rows(conn.execute("""SELECT item_key, sku, name, size, price, category, brand FROM price_product
-                                       WHERE COALESCE(store,'aldi')='aldi' AND missing=0 GROUP BY item_key ORDER BY item_key"""))
+                                       WHERE COALESCE(store,'aldi')='aldi' AND missing=0 AND variant_code IS NULL GROUP BY item_key ORDER BY item_key"""))
             out = []
             for a in src:
                 ms = rows(conn.execute("""SELECT sku, name, size, price, score, picked FROM store_match
@@ -2323,10 +2348,11 @@ class Handler(SimpleHTTPRequestHandler):
             p = b["product"]
             if not conn.execute("SELECT 1 FROM price_product WHERE item_key=? AND sku=?",
                                 (b["key"], p["sku"])).fetchone():
-                conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,store,checked_at)
-                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
+                conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,store,variant_code,checked_at)
+                                VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))""",
                              (b["key"], p["sku"], p["name"], p.get("brand", ""), p.get("size", ""),
-                              float(p.get("price") or 0), p.get("category", ""), p.get("store") or "aldi"))
+                              float(p.get("price") or 0), p.get("category", ""), p.get("store") or "aldi",
+                              b.get("variant") or None))
             conn.commit()
             return self.send_json({"ok": True})
 

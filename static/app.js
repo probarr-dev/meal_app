@@ -3130,6 +3130,7 @@ async function viewPricing() {
     return;
   }
   S.pricingFilter = S.pricingFilter || { q: "", show: "all" };
+  S.pricingFilter.open = S.pricingFilter.open || new Set();
   const f = S.pricingFilter;
   const { items, lastChecked } = await api.get("/api/pricing/items");
   const shown = items.filter((i) => (!f.q || i.key.toLowerCase().includes(f.q.toLowerCase()))
@@ -3150,15 +3151,22 @@ async function viewPricing() {
     </div>
     <div class="card pricing-table-wrap"><table class="pricing-table">
       <tr><th>Item</th><th>Used in</th><th>Aldi products</th><th>Range</th><th></th></tr>
-      ${shown.map((i) => `<tr>
-        <td class="pt-item"><button class="itemEdit link-btn" data-key="${esc(i.key)}" title="Quantities per meal, or merge">${esc(i.key)} ✏️</button></td>
+      ${shown.map((i) => `<tr class="${i.variants.length ? "pt-parent" : ""}" ${i.variants.length ? `data-open="${esc(i.key)}"` : ""}>
+        <td class="pt-item">${i.variants.length ? `<span class="pt-tri ${f.open.has(i.key) ? "open" : ""}" aria-hidden="true">▸</span>` : ""}<button class="itemEdit link-btn" data-key="${esc(i.key)}" title="Quantities per meal, or merge">${esc(i.key)} ✏️</button>${i.variants.length ? ` <span class="hint" style="display:inline">${i.variants.length} counted as</span>` : ""}</td>
         <td class="pt-meals">${esc(i.meals.join(", "))}</td>
         <td>${i.products.map((p) => `<span class="price-chip ${p.missing ? "missing" : ""}" title="${esc(p.category)}">
             <span class="store-badge ${esc(p.store || "aldi")}">${(p.store || "aldi") === "morrisons" ? "M" : "A"}</span> ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
             <button class="unlinkBtn" data-id="${p.id}" aria-label="Remove">✕</button></span>`).join("") || `<span class="hint" style="display:inline">—</span>`}</td>
         <td class="pt-range">${i.low != null ? money(i.low) + (i.high > i.low ? `–${money(i.high)}` : "") : ""}</td>
         <td><button class="linkBtn ghost" data-key="${esc(i.key)}">＋ Link</button></td>
-      </tr>`).join("") || `<tr><td colspan="5" class="empty">Nothing matches.</td></tr>`}
+      </tr>${f.open.has(i.key) ? i.variants.map((v) => `<tr class="pt-variant">
+        <td class="pt-item">↳ ${esc(v.name)}</td>
+        <td class="pt-meals">Bought ${v.times}×${v.paid.length ? `, paid ${money(Math.min(...v.paid))}${Math.max(...v.paid) > Math.min(...v.paid) ? `–${money(Math.max(...v.paid))}` : ""}` : ""}</td>
+        <td>${v.products.map((p) => `<span class="price-chip ${p.missing ? "missing" : ""}"><span class="store-badge ${esc(p.store || "aldi")}">${(p.store || "aldi") === "morrisons" ? "M" : "A"}</span> ${esc(p.name)} <span class="hint" style="display:inline">${esc(p.size)}</span> <strong>${money(p.price)}</strong>
+            <button class="unlinkBtn" data-id="${p.id}" aria-label="Remove">✕</button></span>`).join("") || `<span class="hint" style="display:inline">—</span>`}</td>
+        <td class="pt-range">${money(v.low)}${v.high > v.low ? `–${money(v.high)}` : ""}</td>
+        <td><button class="linkBtn ghost" data-key="${esc(i.key)}" data-variant="${esc(v.code)}" data-vname="${esc(v.name)}">＋ Link</button></td>
+      </tr>`).join("") : ""}`).join("") || `<tr><td colspan="5" class="empty">Nothing matches.</td></tr>`}
     </table></div>`;
 
   const q = document.getElementById("priceQ");
@@ -3183,7 +3191,12 @@ async function viewPricing() {
       ${r.failed ? `<p class="hint">${r.failed} couldn't be checked — try again later.</p>` : ""}`);
     viewPricing();
   });
-  document.querySelectorAll(".linkBtn").forEach((b) => (b.onclick = () => priceLinker(b.dataset.key)));
+  document.querySelectorAll(".linkBtn").forEach((b) => (b.onclick = () => priceLinker(b.dataset.key, b.dataset.variant, b.dataset.vname)));
+  document.querySelectorAll("tr[data-open]").forEach((tr) => (tr.onclick = (e) => {
+    if (e.target.closest("button")) return;  // edit / link / unlink keep their own jobs
+    f.open.has(tr.dataset.open) ? f.open.delete(tr.dataset.open) : f.open.add(tr.dataset.open);
+    viewPricing();
+  }));
   document.querySelectorAll(".itemEdit").forEach((b) => (b.onclick = () => itemEditor(items.find((i) => i.key === b.dataset.key), items)));
   document.querySelectorAll(".dupMerge").forEach((b) => (b.onclick = busy(b, async () => {
     const r = await api.post("/api/pricing/merge", { actor_id: S.meId, from: b.dataset.from, to: b.dataset.to });
@@ -3195,11 +3208,11 @@ async function viewPricing() {
   }));
 }
 
-function priceLinker(key) {
+function priceLinker(key, variant, vname) {
   let store = "aldi";
-  openModal(`Link products — ${key}`, `
+  openModal(`Link products — ${vname || key}`, `
     ${S.morrisonsEnabled ? `<div class="store-tabs"><button class="storeTab on" data-s="aldi">Aldi</button><button class="storeTab" data-s="morrisons">Morrisons</button></div>` : ""}
-    <div class="pricing-bar"><input id="aldiQ" value="${esc(key)}"><button id="aldiGo" class="primary">Search</button></div>
+    <div class="pricing-bar"><input id="aldiQ" value="${esc(vname || key)}"><button id="aldiGo" class="primary">Search</button></div>
     <div id="aldiResults" class="aldi-results"><p class="hint">Searching…</p></div>`);
   const added = new Set();
   const run = async () => {
@@ -3214,7 +3227,7 @@ function priceLinker(key) {
       </div>`).join("") || `<p class="hint">No results — try a shorter search.</p>`;
     document.querySelectorAll(".aldiAdd").forEach((btn) => (btn.onclick = busy(btn, async () => {
       const p = r.results[+btn.dataset.n];
-      const res = await api.post("/api/pricing/link", { actor_id: S.meId, key, product: p });
+      const res = await api.post("/api/pricing/link", { actor_id: S.meId, key, product: p, variant });
       if (res.error) return toast(res.error, "bad");
       added.add(p.sku); btn.textContent = "Added ✓"; btn.disabled = true; btn.classList.remove("primary");
     })));
