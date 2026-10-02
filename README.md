@@ -123,6 +123,9 @@ against a newer database. Take a copy while it's running with:
 sqlite3 data/mealplan.db ".backup 'mealplan-backup.db'"
 ```
 
-Settings also has a one-click JSON export (admin only) of everything except passwords, sessions and push keys.
+Settings (admin only) has two downloads in the Data section:
+
+- **Full backup** (`.db`): a complete snapshot, including password hashes, sign-ins and the push key, so keep the file private. **Restore from a backup…** puts the app back exactly as it was; it keeps a `before-restore-*.db` copy of what it replaced beside the database. On a fresh install, run `python3 server.py restore mealplan-backup-DATE.db` instead.
+- **Readable export** (JSON): everything except passwords, sessions and push keys, for looking at or moving the data.
 
 *Screenshots use a made-up demo family.*
