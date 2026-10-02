@@ -3209,10 +3209,11 @@ async function viewPricing() {
 }
 
 function priceLinker(key, variant, vname) {
+  // A receipt product opens on its code: Aldi looks the exact product up, far more reliably than its abbreviated till text.
   let store = "aldi";
   openModal(`Link products — ${vname || key}`, `
     ${S.morrisonsEnabled ? `<div class="store-tabs"><button class="storeTab on" data-s="aldi">Aldi</button><button class="storeTab" data-s="morrisons">Morrisons</button></div>` : ""}
-    <div class="pricing-bar"><input id="aldiQ" value="${esc(vname || key)}"><button id="aldiGo" class="primary">Search</button></div>
+    <div class="pricing-bar"><input id="aldiQ" value="${esc(variant || key)}"><button id="aldiGo" class="primary">Search</button></div>
     <div id="aldiResults" class="aldi-results"><p class="hint">Searching…</p></div>`);
   const added = new Set();
   const run = async () => {
@@ -3220,6 +3221,10 @@ function priceLinker(key, variant, vname) {
     box.innerHTML = `<p class="hint">Searching…</p>`;
     const r = await api.get(`/api/pricing/search?q=${encodeURIComponent(document.getElementById("aldiQ").value)}${store === "morrisons" ? "&store=morrisons" : ""}`).catch(() => null);
     if (!r || r.error) { box.innerHTML = `<p class="danger-text">${esc(r?.error || OFFLINE_MSG)}</p>`; return; }
+    if (variant && !r.results.length && store === "aldi" && /^\d+$/.test(document.getElementById("aldiQ").value) && vname && vname !== document.getElementById("aldiQ").value) {
+      document.getElementById("aldiQ").value = vname;  // not an Aldi code (or retired): fall back to the till text
+      return run();
+    }
     box.innerHTML = r.results.map((p, n) => `<div class="aldi-row">
         <span><strong>${esc(p.name)}</strong> <span class="hint" style="display:inline">${esc(p.brand)} · ${esc(p.size)} · ${esc(p.category)}</span></span>
         <span class="aldi-price">£${p.price.toFixed(2)}</span>

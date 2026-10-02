@@ -1562,6 +1562,31 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"results": morrisons_search(term)[:24]})
                 except Exception:
                     return self.send_json({"error": "Couldn't reach Morrisons just now."}, 502)
+            if re.fullmatch(r"\d{4,9}", term):  # a receipt product code: look the product up directly
+                found = []
+                for suffix in ("001", "002", "003", "004", "005", "006"):
+                    sku = term.zfill(15) + suffix
+                    hit = cache_get("a:sku:" + sku)
+                    if hit is None:
+                        try:
+                            d = aldi_get(f"/v2/products/{sku}?currency=GBP&serviceType=walk-in")["data"]
+                            hit = [aldi_trim(d)]
+                        except urllib.error.HTTPError as e:
+                            if e.code != 404:  # only a real "no such product" is worth remembering
+                                return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
+                            hit = []
+                        except Exception:
+                            return self.send_json({"error": "Couldn't reach Aldi just now."}, 502)
+                        cache_put("a:sku:" + sku, hit)
+                    found += hit
+                    if not hit and found:
+                        break  # variants run 001, 002...; the first gap ends them
+                if not found:  # older products carry the code as the whole 18-digit sku
+                    try:
+                        found = [aldi_trim(aldi_get(f"/v2/products/{term.zfill(18)}?currency=GBP&serviceType=walk-in")["data"])]
+                    except Exception:
+                        found = []
+                return self.send_json({"results": found, "byCode": True})
             hit = cache_get("a:" + term.lower())
             if hit is not None:
                 return self.send_json({"results": hit})
