@@ -1499,7 +1499,7 @@ class Handler(SimpleHTTPRequestHandler):
             receipt_tables(conn)
             # Receipt products that "count as" an item but aren't one of its linked Aldi products.
             skus = {}
-            for r in conn.execute("SELECT item_key, sku FROM price_product WHERE COALESCE(store,'aldi')='aldi'"):
+            for r in conn.execute("SELECT item_key, sku FROM price_product WHERE COALESCE(store,'aldi')='aldi' AND variant_code IS NULL"):
                 skus.setdefault(r["item_key"], set()).update({r["sku"].lstrip("0"), r["sku"].lstrip("0")[:6]})
             counted = {}
             for r in conn.execute("""SELECT item_key, code, text, qty, amount FROM receipt_line
