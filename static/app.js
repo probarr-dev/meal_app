@@ -1723,6 +1723,9 @@ async function viewRegulars() {
     <header class="block-head">
       <h1>Extras</h1>
       ${weekBannerHTML(S.weeks.find((w) => w.id === weekId)?.start_date || "")}</header>
+    ${!parent ? `<div id="kidPushOffer" class="notice small hidden" style="display:flex;align-items:center;gap:8px">
+      🔔 <span>Get a nudge when we're going shopping, so you never miss adding something.</span>
+      <button id="kidPushOn" style="margin-left:auto">Turn on</button></div>` : ""}
     ${parent && kids.length ? `<div class="remind-row">
       <span class="hint">Remind to add extras</span>
       ${kids.map((k) => `<button class="nudgeExtras ghost" data-id="${k.id}" data-name="${esc(k.name)}">🛒 ${esc(k.name)}${k.notifiable ? "" : " 🔕"}</button>`).join("")}
@@ -1823,6 +1826,14 @@ async function viewRegulars() {
     const extra = extras.find((x) => x.id === +b.dataset.id);
     if (extra) extraEditor(extra);
   }));
+  // Children: offer notifications right here if this phone doesn't have them on.
+  const offer = document.getElementById("kidPushOffer");
+  if (offer && "serviceWorker" in navigator && "PushManager" in window && isSecureContext
+      && Notification.permission !== "denied") {
+    currentSub().then((sub) => { if (!sub) offer.classList.remove("hidden"); }).catch(() => {});
+    const kb = document.getElementById("kidPushOn");
+    kb.onclick = busy(kb, async () => { if (await enablePushHere()) offer.remove(); });
+  }
   document.querySelectorAll(".nudgeExtras").forEach((b) => (b.onclick = busy(b, async () => {
     try {
       const r = await api.post("/api/push/nudge-extras", { actor_id: S.meId, target_id: +b.dataset.id });
