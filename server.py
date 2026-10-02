@@ -1405,6 +1405,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({
                 "weeks": weeks, "people": people, "aisles": aisles or AISLE_ORDER, "tags": TAGS,
                 "thisWeekId": this_id, "nextWeekId": next_id, "voteWeekId": vote_id,
+                # THE shop week, used by everything shopping-related: this week's until
+                # its shop is marked done, then next week's (you shop Friday for the
+                # week that starts Saturday).
+                "shopWeekId": next_id if this_closed else this_id,
                 # Once everything on this week's list is in the trolley, the
                 # week in hand is finished with — anything added from then on
                 # is for the next shop, not this one.

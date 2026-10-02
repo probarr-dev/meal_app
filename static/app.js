@@ -637,6 +637,7 @@ async function boot() {
 
   S.thisWeekId = b.thisWeekId;
   S.nextWeekId = b.nextWeekId;
+  S.shopWeekId = b.shopWeekId || b.thisWeekId;
   S.voteWeekId = b.voteWeekId;
   S.votingOpen = b.votingOpen;
   S.weekStartDow = b.weekStartDow ?? 5;
@@ -686,6 +687,15 @@ function route() {
   document.querySelectorAll(".tabs a").forEach((a) =>
     a.classList.toggle("active", a.dataset.tab === tab));
   document.body.dataset.tab = tab;
+  // Shopping always opens on the shop week (see shopWeekId); other pages go back to
+  // the week you were on. The This/Next toggle still overrides while you're there.
+  if (tab !== S.lastTab) {
+    if (tab === "shopping" && S.shopWeekId) { S.weekBeforeShop = S.weekId; S.weekId = S.shopWeekId; }
+    else if (S.lastTab === "shopping" && S.weekBeforeShop) { S.weekId = S.weekBeforeShop; S.weekBeforeShop = null; }
+    S.lastTab = tab;
+    document.querySelectorAll("#weekToggle button").forEach((b) =>
+      b.classList.toggle("on", (b.dataset.which === "this" ? S.thisWeekId : S.nextWeekId) === S.weekId));
+  }
 
   const view = {
     plan: viewPlan, meals: viewMeals,
@@ -1696,8 +1706,7 @@ function wireAddExtra(onDone, weekId) {
 }
 
 async function viewRegulars() {
-  const thisW = S.weeks.find((w) => w.id === S.thisWeekId);
-  const shopWeekId = thisW && !thisW.shop_closed ? S.thisWeekId : S.nextWeekId;
+  const shopWeekId = S.shopWeekId;
   // Always the next shop you'll do: this week's until it's marked done.
   const weekId = shopWeekId;
   const parent = isParent();
