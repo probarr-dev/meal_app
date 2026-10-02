@@ -2336,7 +2336,7 @@ function renderFinalizePanel(tally, target) {
       <p class="hint">Tick what makes the cut — about ${target} needed.</p>
       <label class="field" style="max-width:160px"><span>Meals needed</span>
         <input id="mealsTargetInput" type="number" min="1" value="${target}"></label>
-      <button id="autoPickBtn" class="ghost" style="margin:0 0 10px">⚖️ Auto-pick fairly</button>
+      <button id="autoPickBtn" class="big-action">⚖️ Auto-pick fairly</button>
       <p id="autoPickNote" class="hint"></p>
       <div class="overview-days"><div class="overview-day">
         ${ranked.filter((t) => t.total > 0 || t.chosen).map((t) => `
