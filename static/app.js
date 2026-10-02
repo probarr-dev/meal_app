@@ -2336,10 +2336,12 @@ function renderFinalizePanel(tally, target) {
       <p class="hint">Tick what makes the cut — about ${target} needed.</p>
       <label class="field" style="max-width:160px"><span>Meals needed</span>
         <input id="mealsTargetInput" type="number" min="1" value="${target}"></label>
+      <button id="autoPickBtn" class="ghost" style="margin:0 0 10px">⚖️ Auto-pick fairly</button>
+      <p id="autoPickNote" class="hint"></p>
       <div class="overview-days"><div class="overview-day">
         ${ranked.filter((t) => t.total > 0 || t.chosen).map((t) => `
           <label class="overview-row ${t.chosen ? "applied" : ""}">
-            <input type="checkbox" class="finalizeCb" data-id="${t.id}" ${t.chosen || t.favourite ? "checked" : ""}>
+            <input type="checkbox" class="finalizeCb" data-id="${t.id}" data-voters="${esc(t.voters || "")}" data-total="${t.total || 0}" ${t.vetoed ? `data-vetoed="1"` : ""} ${t.chosen || t.favourite ? "checked" : ""}>
             <span class="ov-body">
               <span class="ov-name">${esc(t.name)} <span class="vote-who">${voterChips(t.voters)}</span> ${ingredientsWarningHTML(mealNeedsIngredients(t.id))}</span>
             </span>
@@ -2362,6 +2364,33 @@ function wireFinalizePanel(voteWeekId) {
     pc.classList.toggle("done", n >= t && t > 0);
   };
   document.querySelectorAll(".finalizeCb").forEach((c) => c.addEventListener("change", count));
+  // Fair auto-pick (proportional approval): each pick goes to the meal with the most
+  // weight, where a person's like counts 1, then 1/2, 1/3… for each of their likes
+  // already picked. So nobody's favourites crowd everyone else out. Only ticks boxes.
+  const ap = document.getElementById("autoPickBtn");
+  if (ap) ap.onclick = () => {
+    const boxes = [...document.querySelectorAll(".finalizeCb")].filter((c) => !c.dataset.vetoed);
+    const voters = (c) => (c.dataset.voters || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const got = {}, picked = [];
+    const want = Math.min(+tgt.value || 0, boxes.length);
+    while (picked.length < want) {
+      let best = null, bestScore = -1;
+      for (const c of boxes) {
+        if (picked.includes(c)) continue;
+        const sc = voters(c).reduce((s, v) => s + 1 / (1 + (got[v] || 0)), 0);
+        if (sc > bestScore || (sc === bestScore && +c.dataset.total > +best.dataset.total)) { best = c; bestScore = sc; }
+      }
+      if (!best || bestScore <= 0) break;
+      picked.push(best);
+      voters(best).forEach((v) => { got[v] = (got[v] || 0) + 1; });
+    }
+    document.querySelectorAll(".finalizeCb").forEach((c) => { c.checked = picked.includes(c); });
+    const names = [...new Set(boxes.flatMap(voters))];
+    document.getElementById("autoPickNote").textContent = names.length
+      ? "Each person's picks that made it: " + names.map((n) => `${n} ${got[n] || 0}`).join(" · ")
+      : "No votes to go on yet.";
+    count();
+  };
   tgt?.addEventListener("input", count);
   count();
   btn.onclick = busy(btn, async () => {
