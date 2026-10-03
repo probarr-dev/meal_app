@@ -1,0 +1,1111 @@
+{
+ "_about": "Draft ideas for evening meals, not in the app. Quantities are rough, for a family of four.",
+ "meals": [
+  {
+   "name": "Fish Fingers, Chips & Peas",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Oven-baked; a proper kids' classic.",
+   "ingredients": [
+    {
+     "item": "Fish fingers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Chips",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    }
+   ]
+  },
+  {
+   "name": "Toad in the Hole",
+   "meal_type": "proper",
+   "tags": "Kids' favourite",
+   "note": "Sausages baked in batter; serve with mash, veg and gravy.",
+   "ingredients": [
+    {
+     "item": "Sausages",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Plain flour",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Milk",
+     "amount": 1,
+     "unit": "bottle",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Gravy",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Cottage Pie",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Batch cook",
+   "note": "Beef mince under mash. Makes enough for tomorrow's lunch.",
+   "ingredients": [
+    {
+     "item": "Beef Mince",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Beef stock",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Butter",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Shepherd's Pie",
+   "meal_type": "proper",
+   "tags": "Batch cook",
+   "note": "Lamb mince version of cottage pie.",
+   "ingredients": [
+    {
+     "item": "Lamb mince",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Beef stock",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    }
+   ]
+  },
+  {
+   "name": "Lasagne",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Batch cook",
+   "note": "Freezes well in portions.",
+   "ingredients": [
+    {
+     "item": "Beef Mince",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Bolognese sauce",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Lasagne sheets",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "White sauce",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Garlic bread",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    }
+   ]
+  },
+  {
+   "name": "Macaroni Cheese",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Add bacon or broccoli to stretch it.",
+   "ingredients": [
+    {
+     "item": "Pasta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Cheese sauce",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Bacon",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Broccoli",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Fajitas",
+   "meal_type": "proper",
+   "tags": "Quick,Healthy",
+   "note": "Kit plus peppers; let everyone build their own.",
+   "ingredients": [
+    {
+     "item": "Chicken Breast",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Fajita kit",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Soured Cream",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Beef Tacos",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Hard shells, mince, cheese, lettuce.",
+   "ingredients": [
+    {
+     "item": "Beef Mince",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Taco kit",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Lettuce",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Soured Cream",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Cheese Quesadillas",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Wraps, cheese, a bit of ham or peppers.",
+   "ingredients": [
+    {
+     "item": "Tortilla wraps",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Bakery"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Ham",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Salsa",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Tikka Masala",
+   "meal_type": "proper",
+   "tags": "Kids' favourite",
+   "note": "Mild; naan optional.",
+   "ingredients": [
+    {
+     "item": "Chicken Breast",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Curry Sauce",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Basmati Rice",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Naan bread",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Bakery"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Sausage Casserole",
+   "meal_type": "proper",
+   "tags": "Batch cook",
+   "note": "One pot; mash or crusty bread on the side.",
+   "ingredients": [
+    {
+     "item": "Sausages",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Baked Beans",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Spaghetti Carbonara",
+   "meal_type": "proper",
+   "tags": "Quick",
+   "note": "Bacon, egg, cheese. Ready in 20 minutes.",
+   "ingredients": [
+    {
+     "item": "Spaghetti",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Bacon",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Parmesan",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Double cream",
+     "amount": 1,
+     "unit": "pot",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Pesto Pasta",
+   "meal_type": "proper",
+   "tags": "Quick,Healthy",
+   "note": "Add cherry tomatoes and spinach.",
+   "ingredients": [
+    {
+     "item": "Pasta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Chicken Breast",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Pesto",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Cherry tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Spinach",
+     "amount": 1,
+     "unit": "bag",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Salmon, New Potatoes & Greens",
+   "meal_type": "proper",
+   "tags": "Healthy,Quick,Low carb",
+   "note": "Bake the salmon with the potatoes; steam the greens.",
+   "ingredients": [
+    {
+     "item": "Salmon fillets",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "New potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Broccoli",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Green beans",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Lemon",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Chickpea & Veg Curry",
+   "meal_type": "proper",
+   "tags": "Healthy,Batch cook",
+   "note": "Vegetarian; freezes well.",
+   "ingredients": [
+    {
+     "item": "Chickpeas",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Curry Sauce",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Spinach",
+     "amount": 1,
+     "unit": "bag",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Basmati Rice",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Veggie Bean Chilli",
+   "meal_type": "proper",
+   "tags": "Healthy,Batch cook",
+   "note": "Mixed beans and peppers; serve with rice.",
+   "ingredients": [
+    {
+     "item": "Chilli Mix",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Kidney beans",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Basmati Rice",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Chicken & Veg Traybake",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Everything on one tray, one wash-up.",
+   "ingredients": [
+    {
+     "item": "Chicken thighs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Sausage & Veg Traybake",
+   "meal_type": "proper",
+   "tags": "Kids' favourite",
+   "note": "Sausages, potatoes and whatever veg is going.",
+   "ingredients": [
+    {
+     "item": "Sausages",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Egg Fried Rice",
+   "meal_type": "proper",
+   "tags": "Quick",
+   "note": "Uses leftover rice; add peas and prawns or ham.",
+   "ingredients": [
+    {
+     "item": "Basmati Rice",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Spring Onion",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Soy sauce",
+     "amount": 1,
+     "unit": "bottle",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Gammon, Egg & Chips",
+   "meal_type": "proper",
+   "tags": "Treat",
+   "note": "Pub classic; pineapple optional.",
+   "ingredients": [
+    {
+     "item": "Gammon steaks",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Chips",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    }
+   ]
+  },
+  {
+   "name": "Tomato & Cheese Pasta Bake",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Batch cook",
+   "note": "Hidden veg in the sauce.",
+   "ingredients": [
+    {
+     "item": "Pasta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Sweetcorn",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Nuggets, Chips & Beans",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Freezer-drawer dinner.",
+   "ingredients": [
+    {
+     "item": "Chicken nuggets",
+     "amount": 1,
+     "unit": "bag",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Chips",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Baked Beans",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Meatballs & Spaghetti",
+   "meal_type": "proper",
+   "tags": "Kids' favourite",
+   "note": "Ready-made meatballs in a tomato sauce.",
+   "ingredients": [
+    {
+     "item": "Meatballs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Spaghetti",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Beef Stew & Dumplings",
+   "meal_type": "proper",
+   "tags": "Batch cook",
+   "note": "Slow and cheap; best on a cold night.",
+   "ingredients": [
+    {
+     "item": "Diced beef",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Casserole Vegetables",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Beef stock",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Dumpling mix",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Roast Pork Dinner",
+   "meal_type": "proper",
+   "tags": "Treat",
+   "note": "Sunday roast with crackling and apple sauce.",
+   "ingredients": [
+    {
+     "item": "Pork joint",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cabbage",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Apple sauce",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Gravy",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Yorkshire Pudding",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    }
+   ]
+  },
+  {
+   "name": "Fish Pie",
+   "meal_type": "proper",
+   "tags": "Batch cook",
+   "note": "Fish pie mix under mash.",
+   "ingredients": [
+    {
+     "item": "Fish pie mix",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Potatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peas",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Frozen"
+    },
+    {
+     "item": "Parsley sauce",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Caesar Wraps",
+   "meal_type": "proper",
+   "tags": "Quick,Healthy",
+   "note": "No cooking if you use cooked chicken.",
+   "ingredients": [
+    {
+     "item": "Cooked chicken",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Tortilla wraps",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Bakery"
+    },
+    {
+     "item": "Lettuce",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Caesar dressing",
+     "amount": 1,
+     "unit": "bottle",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Parmesan",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Naan Bread Pizzas",
+   "meal_type": "proper",
+   "tags": "Kids' favourite,Quick",
+   "note": "Tomato puree, cheese, toppings; 10 minutes.",
+   "ingredients": [
+    {
+     "item": "Naan bread",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Bakery"
+    },
+    {
+     "item": "Tomato Purree",
+     "amount": 1,
+     "unit": "bottle",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Mozzarella",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Ham",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Sweetcorn",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    }
+   ]
+  }
+ ]
+}

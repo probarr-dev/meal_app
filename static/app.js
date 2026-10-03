@@ -1906,6 +1906,33 @@ async function viewRegulars() {
 
 /* ---------------------------------------------------------------- meals */
 
+// Draft meals kept apart from the library (and from voting) until a parent adds them.
+async function viewIdeas() {
+  const { ideas } = await api.get("/api/ideas");
+  document.getElementById("view").innerHTML = `
+    <header class="block-head"><h1>💡 Meal ideas</h1>
+      <div class="actions"><button id="ideasBack" class="ghost">← Library</button></div></header>
+    <p class="subtitle">Popular evening meals to pick from. Nothing here is on your votes or shopping lists until you add it.</p>
+    <div class="meal-grid">${ideas.map((m) => `
+      <div class="meal-card idea" data-id="${m.id}"><div class="meal-card-main">
+        <div class="meal-card-head"><h3>${esc(m.name)}</h3>
+          ${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
+        <p class="hint" style="margin:2px 0">${esc(m.note)}</p>
+        <details><summary class="hint">${m.ingredients.length} ingredients</summary>
+          <p class="hint">${m.ingredients.map((i) => `${esc(i.item)} × ${esc(String(i.amount))} ${esc(i.unit)}`).join("<br>")}</p></details>
+        <div class="idea-actions"><button class="ideaAdd primary" data-id="${m.id}">＋ Add to my meals</button>
+          <button class="ideaNo ghost" data-id="${m.id}">Not for us</button></div>
+      </div></div>`).join("") || `<p class="empty">No more ideas.</p>`}</div>`;
+  document.getElementById("ideasBack").onclick = viewMeals;
+  const act = (cls, path, msg) => document.querySelectorAll(cls).forEach((b) => (b.onclick = busy(b, async () => {
+    try { await api.post(path, { id: +b.dataset.id, actor_id: S.meId }); }
+    catch (ex) { return toast(ex.message, "bad"); }
+    S.meals = []; toast(msg, "good"); viewIdeas();
+  })));
+  act(".ideaAdd", "/api/idea/add", "Added to your meals.");
+  act(".ideaNo", "/api/idea/dismiss", "Removed from ideas.");
+}
+
 async function viewMeals() {
   S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
   const { tag, q, type } = S.mealFilter;
@@ -1915,9 +1942,10 @@ async function viewMeals() {
     (!q || m.name.toLowerCase().includes(q.toLowerCase())));
 
   const parent = isParent();
+  const ideaCount = parent ? (await api.get("/api/ideas").catch(() => ({ ideas: [] }))).ideas.length : 0;
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Meal Library</h1>
-      <div class="actions">${parent ? `<button id="newMeal" aria-label="New meal" title="New meal"><span aria-hidden="true">+</span><span class="btn-label">New meal</span></button>` : ""}</div></header>
+      <div class="actions">${parent && ideaCount ? `<button id="ideasBtn" title="Draft meals you can add">💡 <span class="btn-label">Ideas ${ideaCount}</span></button>` : ""}${parent ? `<button id="newMeal" aria-label="New meal" title="New meal"><span aria-hidden="true">+</span><span class="btn-label">New meal</span></button>` : ""}</div></header>
     
 
     <div class="filter-bar">
@@ -1962,6 +1990,8 @@ async function viewMeals() {
 
   document.querySelectorAll(".meal-rating").forEach((el) =>
     wireMealRating(el, +el.dataset.id, viewMeals));
+  const ideasBtn = document.getElementById("ideasBtn");
+  if (ideasBtn) ideasBtn.onclick = viewIdeas;
 
   const qBox = document.getElementById("mealQ");
   qBox.oninput = (e) => { S.mealFilter.q = e.target.value; viewMeals().then(() => {

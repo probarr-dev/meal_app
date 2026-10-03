@@ -1486,3 +1486,6 @@ body[data-tab="compare"] main { max-width:1150px; }
 .pantry-parts { display:flex; flex-wrap:wrap; gap:4px 8px; margin-top:2px; font-size:.78rem; color:var(--muted); }
 .pantry-parts .part.extra { color:var(--accent, #b4690e); }
 .pantry-price { margin-left:auto; padding-left:10px; font-size:.82rem; font-weight:700; white-space:nowrap; align-self:center; }
+
+.idea-actions { display:flex; gap:8px; margin-top:8px; }
+.idea-actions button { flex:1; }

@@ -423,10 +423,33 @@ def migrate(conn):
     conn.commit()
 
 
+def seed_ideas(conn):
+    """Draft meal ideas (ideas.json) that sit apart from the library until someone adds them.
+    Seeded once; dismissed ones stay dismissed."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS meal_idea (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, tags TEXT DEFAULT '', meal_type TEXT DEFAULT 'proper',
+        note TEXT DEFAULT '', ingredients TEXT NOT NULL DEFAULT '[]')""")
+    if conn.execute("SELECT 1 FROM config WHERE key='ideas_seeded'").fetchone():
+        return
+    try:
+        with open(os.path.join(HERE, "ideas.json"), encoding="utf-8") as f:
+            ideas = json.load(f)["meals"]
+    except (OSError, ValueError, KeyError):
+        return
+    have = {r["name"].lower() for r in conn.execute("SELECT name FROM meal")}
+    for m in ideas:
+        if m["name"].lower() not in have:
+            conn.execute("INSERT INTO meal_idea(name,tags,meal_type,note,ingredients) VALUES (?,?,?,?,?)",
+                         (m["name"], m.get("tags", ""), m.get("meal_type", "proper"), m.get("note", ""),
+                          json.dumps(m.get("ingredients", []))))
+    conn.execute("INSERT INTO config(key,value) VALUES ('ideas_seeded','1')")
+
+
 def init_db():
     with db() as conn:
         conn.executescript(open(os.path.join(HERE, "schema.sql")).read())
         migrate(conn)
+        seed_ideas(conn)
         migrate_adults_only(conn)
         push.migrate(conn)
         auth.migrate(conn)
@@ -1810,6 +1833,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(body)
 
+        if path == "/api/ideas":
+            if self.me["role"] != "parent":
+                return self.send_json({"error": "Parents only."}, 403)
+            ideas = rows(conn.execute("SELECT * FROM meal_idea ORDER BY name"))
+            for i in ideas:
+                i["ingredients"] = json.loads(i["ingredients"] or "[]")
+            return self.send_json({"ideas": ideas})
+
         if path == "/api/export":
             if not self.me["is_admin"]:
                 return self.send_json({"error": "Admins only."}, 403)
@@ -2307,6 +2338,24 @@ class Handler(SimpleHTTPRequestHandler):
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Only a parent can do that."}, 403)
             conn.execute("DELETE FROM week_meal WHERE week_id=? AND meal_id=?", (b["week_id"], b["meal_id"]))
+            conn.commit()
+            return self.send_json({"ok": True})
+
+        if path in ("/api/idea/add", "/api/idea/dismiss"):
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can do that."}, 403)
+            idea = conn.execute("SELECT * FROM meal_idea WHERE id=?", (b["id"],)).fetchone()
+            if not idea:
+                return self.send_json({"error": "That idea has already gone."}, 400)
+            if path == "/api/idea/add":
+                if conn.execute("SELECT 1 FROM meal WHERE name=? COLLATE NOCASE", (idea["name"],)).fetchone():
+                    return self.send_json({"error": f"You already have a meal called {idea['name']}."}, 400)
+                mid = conn.execute("INSERT INTO meal(name,note,tags,meal_type) VALUES (?,?,?,?)",
+                                   (idea["name"], idea["note"], idea["tags"], idea["meal_type"])).lastrowid
+                for i in json.loads(idea["ingredients"] or "[]"):
+                    conn.execute("INSERT INTO meal_ingredient(meal_id,item,amount,unit,aisle) VALUES (?,?,?,?,?)",
+                                 (mid, i["item"], i.get("amount") or 1, i.get("unit") or "unit", i.get("aisle") or "Cupboard"))
+            conn.execute("DELETE FROM meal_idea WHERE id=?", (b["id"],))
             conn.commit()
             return self.send_json({"ok": True})
 
