@@ -704,6 +704,7 @@ function route() {
     if (tab === "shopping" && S.shopViewWeekId) { S.weekBeforeShop = S.weekId; S.weekId = S.shopViewWeekId; }
     else if (S.lastTab === "shopping" && S.weekBeforeShop) { S.weekId = S.weekBeforeShop; S.weekBeforeShop = null; }
     S.lastTab = tab;
+    S.showIdeas = false;
     document.querySelectorAll("#weekToggle button").forEach((b) =>
       b.classList.toggle("on", (b.dataset.which === "this" ? S.thisWeekId : S.nextWeekId) === S.weekId));
   }
@@ -1908,6 +1909,7 @@ async function viewRegulars() {
 
 // Draft meals kept apart from the library (and from voting) until a parent adds them.
 async function viewIdeas() {
+  S.showIdeas = true;
   const { ideas } = await api.get("/api/ideas");
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>💡 Meal ideas</h1>
@@ -1923,7 +1925,7 @@ async function viewIdeas() {
         <div class="idea-actions"><button class="ideaAdd primary" data-id="${m.id}">＋ Add to my meals</button>
           <button class="ideaNo ghost" data-id="${m.id}">Not for us</button></div>
       </div></div>`).join("") || `<p class="empty">No more ideas.</p>`}</div>`;
-  document.getElementById("ideasBack").onclick = viewMeals;
+  document.getElementById("ideasBack").onclick = () => { S.showIdeas = false; viewMeals(); };
   const act = (cls, path, msg) => document.querySelectorAll(cls).forEach((b) => (b.onclick = busy(b, async () => {
     try { await api.post(path, { id: +b.dataset.id, actor_id: S.meId }); }
     catch (ex) { return toast(ex.message, "bad"); }
@@ -1934,6 +1936,7 @@ async function viewIdeas() {
 }
 
 async function viewMeals() {
+  if (S.showIdeas) return viewIdeas();  // a live refresh must not drop you out of Ideas
   S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
   const { tag, q, type } = S.mealFilter;
   const shown = S.meals.filter((m) =>
