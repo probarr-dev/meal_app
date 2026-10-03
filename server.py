@@ -1072,7 +1072,7 @@ def build_shopping(conn, week_id, store_id=None):
     """Aggregate every ingredient across the week, plus routine items and extras."""
     totals = {}  # item -> dict
 
-    def add(item, amount, unit, aisle, tag=None, note=None, meal=None):
+    def add(item, amount, unit, aisle, tag=None, note=None, meal=None, src=None):
         # Different meals spell the same ingredient differently ("Grated
         # Cheese" vs "grated cheese") — normalise casing before grouping, or
         # they silently end up as two separate lines instead of summing.
@@ -1097,6 +1097,9 @@ def build_shopping(conn, week_id, store_id=None):
                     totals[key] = {"item": item, "amount": 0, "unit": unit,
                                    "aisle": aisle, "tags": set(), "note": note, "meals": {}}
         totals[key]["amount"] += amount
+        if src:  # who asked for how much: a meal's ingredient, or an extra
+            cur = totals[key].setdefault("parts", {}).setdefault(src, [0, unit])
+            cur[0] += amount
         if tag:
             totals[key]["tags"].add(tag)
         if note:
@@ -1123,7 +1126,8 @@ def build_shopping(conn, week_id, store_id=None):
                 meal_names[mid] = conn.execute("SELECT name FROM meal WHERE id=?", (mid,)).fetchone()["name"]
             for ing in rows(conn.execute(
                     "SELECT * FROM meal_ingredient WHERE meal_id=?", (mid,))):
-                add(ing["item"], ing["amount"], ing["unit"], ing["aisle"], meal=(mid, meal_names[mid]))
+                add(ing["item"], ing["amount"], ing["unit"], ing["aisle"], meal=(mid, meal_names[mid]),
+                    src=("meal", meal_names[mid]))
 
     # Standing meals (a WFH lunch, a packed lunch for work) — needed
     # every week whether or not they're plotted on a day. Skip any that
@@ -1137,7 +1141,7 @@ def build_shopping(conn, week_id, store_id=None):
         for ing in rows(conn.execute(
                 "SELECT * FROM meal_ingredient WHERE meal_id=?", (r["id"],))):
             add(ing["item"], ing["amount"], ing["unit"], ing["aisle"],
-                tag=r["person"] or "everyone", meal=(r["id"], r["name"]))
+                tag=r["person"] or "everyone", meal=(r["id"], r["name"]), src=("meal", r["name"]))
 
     options = {}
     for e in rows(conn.execute(
@@ -1149,7 +1153,8 @@ def build_shopping(conn, week_id, store_id=None):
         # "everyone" not "household": the aisle list already has a Household
         # aisle, and having both meanings share a word is what made the two
         # dropdowns on the add-item row indistinguishable.
-        add(e["item"], e["amount"] * e["qty"], e["unit"], e["aisle"], tag=e["person"] or "everyone")
+        add(e["item"], e["amount"] * e["qty"], e["unit"], e["aisle"], tag=e["person"] or "everyone",
+            src=("extra", e["person"] or "everyone"))
         if e.get("options"):
             options[item_key(e["item"])] = [o.strip() for o in e["options"].split(",") if o.strip()]
 
@@ -1163,7 +1168,9 @@ def build_shopping(conn, week_id, store_id=None):
         t = {**t, "tags": sorted(t["tags"]), "key": key, "options": options.get(key),
              "qty": fmt_qty(t["amount"], t["unit"]), "checked": bool(checked.get(key, 0)),
              "pantryChecked": bool(pantry_checked.get(key, 0)),
-             "meals": [{"id": mid, "name": name} for mid, name in sorted(t["meals"].items(), key=lambda x: x[1])]}
+             "meals": [{"id": mid, "name": name} for mid, name in sorted(t["meals"].items(), key=lambda x: x[1])],
+             "parts": [{"kind": k[0], "name": k[1], "qty": fmt_qty(a, u)}
+                       for k, (a, u) in sorted(t.get("parts", {}).items(), key=lambda x: (x[0][0] != "meal", x[0][1]))]}
         by_aisle.setdefault(t["aisle"], []).append(t)
 
     order = store_aisle_order(conn, store_id or default_store_id(conn))

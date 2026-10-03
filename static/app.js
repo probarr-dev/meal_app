@@ -1174,6 +1174,21 @@ function extraEditor(extra) {
   });
 }
 
+const priceText = (lo, hi) => lo == null ? "" : `£${lo.toFixed(2)}${hi > lo ? `–${hi.toFixed(2)}` : ""}`;
+
+// Cupboard check: what the shop is now estimated at, and what the ticked items are saving.
+function pantrySummaryHTML(groups) {
+  let low = 0, high = 0, saveLow = 0, saveHigh = 0, ticked = 0, unpriced = 0;
+  groups.forEach((g) => g.items.forEach((i) => {
+    if (i.pantryChecked) ticked++;
+    if (i.priceLow == null) { if (!i.pantryChecked) unpriced++; return; }
+    if (i.pantryChecked) { saveLow += i.priceLow; saveHigh += i.priceHigh; } else { low += i.priceLow; high += i.priceHigh; }
+  }));
+  const range = (a, b) => `£${a.toFixed(2)}${b - a >= 0.005 ? `–£${b.toFixed(2)}` : ""}`;
+  return `💷 To buy ≈ <strong>${range(low, high)}</strong>${unpriced ? ` <span class="hint" style="display:inline">(${unpriced} not priced)</span>` : ""}
+    · 🧺 From the cupboard saves <strong>${range(saveLow, saveHigh)}</strong> <span class="hint" style="display:inline">(${ticked} ticked)</span>`;
+}
+
 async function viewShopping() {
   if (!S.stores) S.stores = (await api.get("/api/stores")).stores;
   if (!S.storeId || !S.stores.some((s) => s.id === S.storeId)) {
@@ -1227,6 +1242,7 @@ async function viewShopping() {
         Come back to this any time before you go.
         <button id="headingOutBtn" class="ghost">✓ Heading to the shop →</button>
       </div>
+      <div class="notice small shop-estimate" id="pantrySummary"></div>
       <div class="card">
         ${groups.map((g) => `
           <div class="aisle" style="--dot:hsl(${hue(g.aisle)} 52% 58%)">
@@ -1235,11 +1251,17 @@ async function viewShopping() {
               <label class="row shop-row" data-key="${esc(i.key)}">
                 <input type="checkbox" class="pantryCb" data-item="${esc(i.key)}" ${i.pantryChecked ? "checked" : ""}>
                 <span class="qty">${esc(i.qty)}</span>
-                <span class="shop-item"><span class="shop-name">${esc(i.item)}${i.options ? ` <span class="hint" style="display:inline">(${i.options.map(esc).join(" / ")})</span>` : ""}</span></span>
+                <span class="shop-item"><span class="shop-name">${esc(i.item)}${i.options ? ` <span class="hint" style="display:inline">(${i.options.map(esc).join(" / ")})</span>` : ""}</span>
+                  <span class="pantry-parts">${i.parts.map((x) => `<span class="part ${x.kind}">${x.kind === "meal" ? `🍽 ${esc(x.name)}` : `➕ Extra${x.name === "everyone" ? "" : ` (${esc(x.name)})`}`} <b>${esc(x.qty)}</b></span>`).join("")}</span></span>
+                <span class="pantry-price">${priceText(i.priceLow, i.priceHigh)}</span>
               </label>`).join("")}</div>
           </div>`).join("")}
       </div>`;
+    const showSavings = () => { document.getElementById("pantrySummary").innerHTML = pantrySummaryHTML(groups); };
+    showSavings();
     document.querySelectorAll(".pantryCb").forEach((cb) => (cb.onchange = busy(cb, async () => {
+      groups.forEach((g) => g.items.forEach((i) => { if (i.key === cb.dataset.item) i.pantryChecked = cb.checked; }));
+      showSavings();
       await api.post("/api/pantry-tick", { week_id: S.weekId, item: cb.dataset.item, checked: cb.checked ? 1 : 0 });
     })));
     const headingOut = document.getElementById("headingOutBtn");

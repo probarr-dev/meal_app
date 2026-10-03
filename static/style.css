@@ -1482,3 +1482,7 @@ body[data-tab="compare"] main { max-width:1150px; }
 .pt-tri.open { transform:rotate(90deg); }
 .pt-variant td { background:var(--surface-2, rgba(127,127,127,.07)); }
 .pt-variant .pt-item { padding-left:22px; color:var(--muted); }
+
+.pantry-parts { display:flex; flex-wrap:wrap; gap:4px 8px; margin-top:2px; font-size:.78rem; color:var(--muted); }
+.pantry-parts .part.extra { color:var(--accent, #b4690e); }
+.pantry-price { margin-left:auto; padding-left:10px; font-size:.82rem; font-weight:700; white-space:nowrap; align-self:center; }
