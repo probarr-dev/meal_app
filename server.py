@@ -2599,6 +2599,9 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("DELETE FROM receipt WHERE week_id=?", (wid,))
             rid = conn.execute("INSERT INTO receipt(week_id,total) VALUES (?,?)", (wid, total)).lastrowid
             for l in lines:
+                if l["kind"] == "regular" and l.get("decided") and not l.get("once") and not l.get("item_key"):
+                    # Becomes a new regular item below: tie this line to it, so what was paid prices it.
+                    l["item_key"] = item_key(l.get("name") or l["text"].title())
                 conn.execute("INSERT INTO receipt_line VALUES (?,?,?,?,?,?,?)",
                              (rid, l["code"], l["text"], l["qty"], l["amount"], l.get("item_key"), l["kind"]))
                 if l.get("decided") and not l.get("once"):  # remember the choice for this product next time
