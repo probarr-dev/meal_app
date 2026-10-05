@@ -864,10 +864,11 @@ button.meal-peek:hover { color:var(--accent); border-bottom-color:var(--accent);
 /* Folded away by default — see .past-toggle. */
 .timeline.past-hidden .tl-day.is-past { display:none; }
 .past-toggle {
-  background:none; border:none; color:var(--muted); font-size:.8rem;
-  padding:6px 4px; margin:2px 0 4px;
+  font-size:.76rem; padding:4px 12px; margin:2px 0 8px; border-radius:999px; color:var(--muted);
 }
+.past-toggle[aria-expanded="true"] { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
 .past-toggle:hover { color:var(--text); }
+.past-toggle[aria-expanded="true"]:hover { color:#fff; }
 
 .tl-day.is-past { padding-bottom:10px; opacity:.5; }
 .tl-day.is-past .tl-badge {
