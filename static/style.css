@@ -1553,3 +1553,13 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 /* iOS softens whatever sits in the top strip of the screen (the same blur you see while scrolling).
    Start the page content just below that strip, so headings are sharp at rest and only soften as they scroll up into it. */
 @media (max-width:700px) { main { padding-top:18px; } }
+
+/* Meal cards: title, then one tidy row of pills, then the ingredients, then price and rating along the bottom. */
+.meal-card h3 { display:block; line-height:1.25; }
+.meal-pills { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 4px; }
+.meal-pills .tag { margin-left:0; }
+.tag-when { font-style:normal; }
+.meal-card .ing-preview { margin:2px 0 0; }
+.meal-foot { display:flex; align-items:center; justify-content:space-between; gap:4px 12px; flex-wrap:wrap; margin-top:8px; }
+.meal-foot .meal-rating { margin-top:0; }
+.meal-cost { white-space:nowrap; font-weight:700; font-size:.9rem; margin:0; }

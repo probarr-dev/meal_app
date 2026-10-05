@@ -1987,8 +1987,8 @@ async function viewIdeas() {
     ${hidden ? `<p class="hint"><button id="ideasUnbuyable" class="link-btn">${S.showUnbuyable ? "Hide" : "Show"} ${hidden} that need something Aldi doesn't sell</button></p>` : ""}
     <div class="meal-grid">${ideas.map((m) => `
       <div class="meal-card idea" data-id="${m.id}"><div class="meal-card-main">
-        <div class="meal-card-head"><h3>${esc(m.name)}</h3>
-          ${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
+        <h3>${esc(m.name)}</h3>
+        <div class="meal-pills">${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
         <p class="hint" style="margin:2px 0">${esc(m.note)}</p>
         <p class="idea-price">${m.priced ? `≈ <strong>£${m.priced.total.toFixed(2)}</strong> at Aldi${cantBuy(m) ? ` <span class="danger-text">· not at Aldi: ${m.priced.missing.map(esc).join(", ")}</span>` : ""}` : `<span class="hint">pricing…</span>`}</p>
         <details><summary class="hint">${m.ingredients.length} ingredients</summary>
@@ -2047,22 +2047,21 @@ async function viewMeals() {
         <div class="meal-card ${parent && mealNeedsIngredients(m.id) ? "needs-ings" : ""}" data-id="${m.id}">
           ${m.has_photo ? `<img class="meal-photo" loading="lazy" alt="" src="/api/meal-photo?id=${m.id}&v=${S.photoV || 0}">` : ""}
           <div class="meal-card-main">
-            <div class="meal-card-head">
-              <h3>${esc(m.name)}</h3>
+            <h3>${esc(m.name)}</h3>
+            <div class="meal-pills">
               ${MEAL_TYPES.filter(([val]) => mealHasType(m, val))
                 .map(([val, label]) => `<span class="tag ${val === "light" ? "tag-protein" : ""}">${esc(label)}</span>`).join("")}
               ${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}
               ${lastHadText(m) ? `<span class="tag tag-when">${lastHadText(m)}</span>` : ""}
               ${m.recurring ? `<span class="tag tag-protein">🔁 ${esc(S.people.find((p) => p.id === m.person_id)?.name || "Everyone")}</span>` : ""}
             </div>
-            <div class="meal-card-stats">
-              
+            <span class="hint ing-preview">${m.ingredients.length
+              ? esc(m.ingredients.map((i) => i.item).join(", "))
+              : "no ingredients yet"}</span>
+            <div class="meal-foot">
               ${m.costHigh > 0 ? `<span class="meal-cost" title="Share of Aldi pack prices this meal uses${m.unpriced ? `; ${m.unpriced} ingredient${m.unpriced === 1 ? "" : "s"} not priced yet` : ""}">≈ £${m.costLow.toFixed(2)}${m.costHigh - m.costLow >= 0.005 ? `–${m.costHigh.toFixed(2)}` : ""}${m.unpriced ? "+" : ""}</span>` : ""}
-              <span class="hint ing-preview">${m.ingredients.length
-                ? esc(m.ingredients.map((i) => i.item).join(", "))
-                : "no ingredients yet"}</span>
+              ${mealRatingHTML(m)}
             </div>
-            ${mealRatingHTML(m)}
           </div>
           ${parent ? `<button class="edit day-hidden" data-id="${m.id}"></button>` : ""}
         </div>`).join("") || `<p class="empty">Nothing matches that filter.</p>`}
