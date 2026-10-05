@@ -1489,3 +1489,6 @@ body[data-tab="compare"] main { max-width:1150px; }
 
 .idea-actions { display:flex; gap:8px; margin-top:8px; }
 .idea-actions button { flex:1; }
+
+.idea-price { margin:4px 0; font-size:.9rem; }
+.meal-cost { display:inline-block; font-weight:700; font-size:.82rem; margin-right:8px; }

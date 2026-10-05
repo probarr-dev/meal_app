@@ -1910,22 +1910,31 @@ async function viewRegulars() {
 // Draft meals kept apart from the library (and from voting) until a parent adds them.
 async function viewIdeas() {
   S.showIdeas = true;
-  const { ideas } = await api.get("/api/ideas");
+  const { ideas: all, pricing } = await api.get("/api/ideas");
+  const cantBuy = (m) => m.priced && m.priced.missing.length;
+  const ideas = S.showUnbuyable ? all : all.filter((m) => !cantBuy(m));
+  const hidden = all.length - all.filter((m) => !cantBuy(m)).length;
+  if (pricing || all.some((m) => !m.priced)) setTimeout(() => { if (S.showIdeas) viewIdeas(); }, 6000);  // prices are still being worked out
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>💡 Meal ideas</h1>
       <div class="actions"><button id="ideasBack" class="ghost">← Library</button></div></header>
-    <p class="subtitle">Popular evening meals to pick from. Nothing here is on your votes or shopping lists until you add it.</p>
+    <p class="subtitle">Popular evening meals to pick from, priced from Aldi's website for the family. Nothing here is on your votes or shopping lists until you add it.</p>
+    ${hidden ? `<p class="hint"><button id="ideasUnbuyable" class="link-btn">${S.showUnbuyable ? "Hide" : "Show"} ${hidden} that need something Aldi doesn't sell</button></p>` : ""}
     <div class="meal-grid">${ideas.map((m) => `
       <div class="meal-card idea" data-id="${m.id}"><div class="meal-card-main">
         <div class="meal-card-head"><h3>${esc(m.name)}</h3>
           ${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
         <p class="hint" style="margin:2px 0">${esc(m.note)}</p>
+        <p class="idea-price">${m.priced ? `≈ <strong>£${m.priced.total.toFixed(2)}</strong> at Aldi${cantBuy(m) ? ` <span class="danger-text">· not at Aldi: ${m.priced.missing.map(esc).join(", ")}</span>` : ""}` : `<span class="hint">pricing…</span>`}</p>
         <details><summary class="hint">${m.ingredients.length} ingredients</summary>
-          <p class="hint">${m.ingredients.map((i) => `${esc(i.item)} × ${esc(String(i.amount))} ${esc(i.unit)}`).join("<br>")}</p></details>
+          <p class="hint">${m.priced ? m.priced.lines.map((l) => `${esc(l.item)} ${esc(String(l.amount))}${esc(l.unit === "unit" ? "" : " " + l.unit)} — ${l.product ? `${esc(l.product.name)} (${esc(l.product.size || "")}) £${l.cost.toFixed(2)}` : `<span class="danger-text">not at Aldi</span>`}`).join("<br>")
+            : m.ingredients.map((i) => `${esc(i.item)} × ${esc(String(i.amount))} ${esc(i.unit)}`).join("<br>")}</p></details>
         <div class="idea-actions"><button class="ideaAdd primary" data-id="${m.id}">＋ Add to my meals</button>
           <button class="ideaNo ghost" data-id="${m.id}">Not for us</button></div>
       </div></div>`).join("") || `<p class="empty">No more ideas.</p>`}</div>`;
   document.getElementById("ideasBack").onclick = () => { S.showIdeas = false; viewMeals(); };
+  const ub = document.getElementById("ideasUnbuyable");
+  if (ub) ub.onclick = () => { S.showUnbuyable = !S.showUnbuyable; viewIdeas(); };
   const act = (cls, path, msg) => document.querySelectorAll(cls).forEach((b) => (b.onclick = busy(b, async () => {
     try { await api.post(path, { id: +b.dataset.id, actor_id: S.meId }); }
     catch (ex) { return toast(ex.message, "bad"); }
@@ -1981,6 +1990,7 @@ async function viewMeals() {
               ${m.recurring ? `<span class="tag tag-protein">🔁 ${esc(S.people.find((p) => p.id === m.person_id)?.name || "Everyone")}</span>` : ""}
             </div>
             <div class="meal-card-stats">
+              ${m.costHigh > 0 ? `<span class="meal-cost" title="Share of Aldi pack prices this meal uses${m.unpriced ? `; ${m.unpriced} ingredient${m.unpriced === 1 ? "" : "s"} not priced yet` : ""}">≈ £${m.costLow.toFixed(2)}${m.costHigh - m.costLow >= 0.005 ? `–${m.costHigh.toFixed(2)}` : ""}${m.unpriced ? "+" : ""}</span>` : ""}
               <span class="hint ing-preview">${m.ingredients.length
                 ? esc(m.ingredients.map((i) => i.item).join(", "))
                 : "no ingredients yet"}</span>

@@ -430,6 +430,8 @@ def seed_ideas(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS meal_idea (
         id INTEGER PRIMARY KEY, name TEXT NOT NULL, tags TEXT DEFAULT '', meal_type TEXT DEFAULT 'proper',
         note TEXT DEFAULT '', ingredients TEXT NOT NULL DEFAULT '[]')""")
+    if "priced" not in [r["name"] for r in conn.execute("PRAGMA table_info(meal_idea)")]:
+        conn.execute("ALTER TABLE meal_idea ADD COLUMN priced TEXT")
     row = conn.execute("SELECT value FROM config WHERE key='ideas_batch'").fetchone()
     done = int(row["value"]) if row else (1 if conn.execute(
         "SELECT 1 FROM config WHERE key='ideas_seeded'").fetchone() else 0)
@@ -662,6 +664,99 @@ def auto_link_receipt_products(db):
                                     VALUES (?,?,?,?,?,?,?,'aldi',?,datetime('now'))""",
                                  (key, p["sku"], p["name"], p["brand"], p["size"], p["price"], p["category"], code))
         conn.commit()
+
+
+def aldi_search(term):
+    """Aldi's trimmed search results for a term (cached for good). Raises if Aldi can't be reached."""
+    hit = cache_get("a:" + term.lower())
+    if hit is None:
+        d = aldi_get("/v3/product-search?" + urllib.parse.urlencode(
+            {"currency": "GBP", "serviceType": "walk-in", "q": term, "page[limit]": 24}))
+        hit = [aldi_trim(p) for p in d.get("data", [])]
+        cache_put("a:" + term.lower(), hit)
+    return hit
+
+
+def size_units(size):
+    """('g'|'ml'|'each', n) for a pack size like '500 g', '1 l', '6 Each'; None if unknown."""
+    m = re.match(r"\s*([\d.]+)\s*([A-Za-z]+)", size or "")
+    if not m:
+        return None
+    n, u = float(m.group(1)), m.group(2).upper()
+    if u in ("KG", "G"):
+        return ("g", n * (1000 if u == "KG" else 1))
+    if u in ("L", "ML", "CL"):
+        return ("ml", n * {"L": 1000, "ML": 1, "CL": 10}[u])
+    if u in ("EACH", "PACK"):
+        return ("each", n)
+    return None
+
+
+def line_cost(amount, unit, size, price):
+    """The share of a pack a recipe uses: 400 g of a 1 kg pack costs 40% of it."""
+    su = size_units(size)
+    amount = float(amount or 0)
+    if su and unit in ("g", "ml") and su[0] == unit:
+        return price * amount / su[1]
+    if su and su[0] == "each" and unit == "unit" and su[1] > 1:
+        return price * amount / su[1]
+    return price * amount
+
+
+def aldi_match(term, unit="unit"):
+    """The Aldi product that best fits an ingredient, or None if Aldi doesn't sell it:
+    every word of the ingredient must be in the product name; the plainest name wins, then the cheapest."""
+    want = name_tokens(term)
+    if not want:
+        return None
+    res = aldi_search(term)
+    cands = [p for p in res if want <= name_tokens(p["name"]) and p["price"] > 0]
+    if not cands:
+        return None
+
+    def per_unit(p):
+        su = size_units(p["size"])
+        return p["price"] / su[1] if su and su[0] == unit else p["price"]
+    return min(cands, key=lambda p: (len(name_tokens(p["name"])) - len(want), per_unit(p)))
+
+
+IDEA_PRICING = {"running": False}
+
+
+def price_idea(conn, idea):
+    """Match every ingredient of a draft idea to Aldi and cost it. Stored on the idea."""
+    lines, total, missing = [], 0.0, []
+    for ing in json.loads(idea["ingredients"] or "[]"):
+        try:
+            p = aldi_match(ing.get("search") or ing["item"], ing.get("unit") or "unit")
+        except Exception:
+            return None  # Aldi unreachable: try again later, don't record a false "not at Aldi"
+        cost = round(line_cost(ing.get("amount") or 1, ing.get("unit") or "unit", p["size"], p["price"]), 2) if p else None
+        if p is None:
+            missing.append(ing["item"])
+        else:
+            total += cost
+        lines.append({"item": ing["item"], "amount": ing.get("amount"), "unit": ing.get("unit"),
+                      "product": p, "cost": cost})
+    return {"total": round(total, 2), "lines": lines, "missing": missing}
+
+
+def price_ideas_now(db):
+    """Background job: price any draft idea that hasn't been yet (searches are cached, so this is a one-off)."""
+    if IDEA_PRICING["running"]:
+        return
+    IDEA_PRICING["running"] = True
+    try:
+        with db() as conn:
+            for idea in rows(conn.execute("SELECT * FROM meal_idea WHERE priced IS NULL")):
+                priced = price_idea(conn, idea)
+                if priced is not None:
+                    conn.execute("UPDATE meal_idea SET priced=? WHERE id=?", (json.dumps(priced), idea["id"]))
+                    conn.commit()
+    except Exception as e:
+        print(f"pricing ideas failed: {e}", flush=True)
+    finally:
+        IDEA_PRICING["running"] = False
 
 
 def vetoes_allowed(conn):
@@ -1862,7 +1957,10 @@ class Handler(SimpleHTTPRequestHandler):
             ideas = rows(conn.execute("SELECT * FROM meal_idea ORDER BY name"))
             for i in ideas:
                 i["ingredients"] = json.loads(i["ingredients"] or "[]")
-            return self.send_json({"ideas": ideas})
+                i["priced"] = json.loads(i["priced"]) if i["priced"] else None
+            if any(i["priced"] is None for i in ideas) and not IDEA_PRICING["running"]:
+                threading.Thread(target=price_ideas_now, args=(db,), daemon=True).start()
+            return self.send_json({"ideas": ideas, "pricing": IDEA_PRICING["running"]})
 
         if path == "/api/export":
             if not self.me["is_admin"]:
@@ -1923,6 +2021,18 @@ class Handler(SimpleHTTPRequestHandler):
                     r = conn.execute("SELECT stars FROM meal_rating WHERE meal_id=? AND person_id=?",
                                      (m["id"], int(viewer))).fetchone()
                     m["my_rating"] = r["stars"] if r else None
+            links = price_links(conn)
+            for m in out:
+                low = high = 0.0
+                unpriced = 0
+                for ing in m["ingredients"]:
+                    prods = [p for p in links.get(item_key(ing["item"]), []) if not p["missing"] and not p.get("variant_code")]
+                    if not prods:
+                        unpriced += 1
+                        continue
+                    costs = [line_cost(ing["amount"], ing["unit"], p["size"], p["price"]) for p in prods]
+                    low += min(costs); high += max(costs)
+                m["costLow"], m["costHigh"], m["unpriced"] = round(low, 2), round(high, 2), unpriced
             return self.send_json({"meals": out})
 
         if path == "/api/extras":
@@ -2376,9 +2486,16 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": f"You already have a meal called {idea['name']}."}, 400)
                 mid = conn.execute("INSERT INTO meal(name,note,tags,meal_type) VALUES (?,?,?,?)",
                                    (idea["name"], idea["note"], idea["tags"], idea["meal_type"])).lastrowid
+                matched = {l["item"]: l["product"] for l in (json.loads(idea["priced"] or "{}").get("lines") or [])}
                 for i in json.loads(idea["ingredients"] or "[]"):
                     conn.execute("INSERT INTO meal_ingredient(meal_id,item,amount,unit,aisle) VALUES (?,?,?,?,?)",
                                  (mid, i["item"], i.get("amount") or 1, i.get("unit") or "unit", i.get("aisle") or "Cupboard"))
+                    p = matched.get(i["item"])  # tie it to the Aldi product, so the meal has a price
+                    if p and not conn.execute("SELECT 1 FROM price_product WHERE item_key=? AND sku=?",
+                                              (item_key(i["item"]), p["sku"])).fetchone():
+                        conn.execute("""INSERT INTO price_product(item_key,sku,name,brand,size,price,category,store,checked_at)
+                                        VALUES (?,?,?,?,?,?,?,'aldi',datetime('now'))""",
+                                     (item_key(i["item"]), p["sku"], p["name"], p["brand"], p["size"], p["price"], p["category"]))
             conn.execute("DELETE FROM meal_idea WHERE id=?", (b["id"],))
             conn.commit()
             return self.send_json({"ok": True})
