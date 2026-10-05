@@ -2930,7 +2930,7 @@ async function viewSettings() {
 /* ---------------------------------------------------------------- rewards */
 
 async function viewRewards() {
-  const { balances, catalog, requests, myBalance, healthyTags, earned = {}, myEarned = 0, history = [] } =
+  const { balances, catalog, requests, myBalance, healthyTags, pointsMode = "all", earned = {}, myEarned = 0, history = [] } =
     await api.get(`/api/rewards?person=${S.meId || ""}`);
   const parent = isParent();
   const nameOf = (id) => S.people.find((p) => p.id === id)?.name || "?";
@@ -3009,6 +3009,15 @@ async function viewRewards() {
         ${S.tags.map((t) => `<label class="inline tag-opt">
           <input type="checkbox" class="healthyTagCb" value="${esc(t)}" ${healthyTags.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}
       </div>
+    </div>
+
+    <h2 class="sec-title">How points are earned</h2>
+    <div class="card pad">
+      <label class="inline tag-opt"><input type="radio" name="pointsMode" class="pointsModeRb" value="all" ${pointsMode === "all" ? "checked" : ""}>
+        <span><strong>Every healthy vote</strong> earns a point, as soon as it's cast.</span></label><br>
+      <label class="inline tag-opt"><input type="radio" name="pointsMode" class="pointsModeRb" value="chosen" ${pointsMode === "chosen" ? "checked" : ""}>
+        <span>Only votes for healthy meals that <strong>make the week's list</strong>.</span></label>
+      <p class="hint">Changing this re-counts everyone's past votes straight away.</p>
     </div>
 
     <h2 class="sec-title">Reward catalog</h2>
@@ -3099,6 +3108,10 @@ async function viewRewards() {
     const res = await api.post("/api/redemption/resolve", { id: +b.dataset.id, decision: "deny", resolver_id: S.meId });
     if (res.error) return toast(res.error, "bad");
     viewRewards();
+  })));
+  document.querySelectorAll(".pointsModeRb").forEach((rb) => (rb.onchange = busy(rb, async () => {
+    await api.post("/api/config/points-mode", { mode: rb.value, admin_id: S.meId });
+    toast("Points re-counted.", "good"); viewRewards();
   })));
   document.querySelectorAll(".healthyTagCb").forEach((cb) => (cb.onchange = busy(cb, async () => {
     const tags = [...document.querySelectorAll(".healthyTagCb:checked")].map((c) => c.value);

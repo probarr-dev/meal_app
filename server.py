@@ -1051,14 +1051,27 @@ def log_extra(conn, person_id, item, week_id, action):
                  (person_id or None, item, week_id, action))
 
 
+def points_mode(conn):
+    """'all' = every healthy vote earns a point; 'chosen' = only votes for meals that made the week."""
+    r = conn.execute("SELECT value FROM config WHERE key='points_mode'").fetchone()
+    return r["value"] if r and r["value"] in ("all", "chosen") else "all"
+
+
 def sync_healthy_points(conn):
-    """Healthy-vote points are derived, not one-off: re-apply the current
-    healthy tags to every finalised week, so re-tagging a meal fixes history."""
+    """Healthy-vote points are derived, not one-off: re-apply the current healthy tags and the
+    household's points rule to every week, so re-tagging a meal or changing the rule fixes history."""
     healthy = {t.strip() for t in ((conn.execute(
         "SELECT value FROM config WHERE key='healthy_tags'").fetchone() or {"value": ""})["value"] or "").split(",")
         if t.strip()}
-    want = {}
-    for r in rows(conn.execute("""
+    mode = points_mode(conn)
+    if mode == "all":  # every vote counts as soon as it's cast
+        votes = conn.execute("""
+            SELECT v.person_id, v.week_id, v.meal_id, m.name, m.tags
+            FROM meal_vote v
+            JOIN meal m ON m.id=v.meal_id
+            JOIN person p ON p.id=v.person_id AND p.role!='parent'""")
+    else:
+        votes = conn.execute("""
             SELECT v.person_id, v.week_id, v.meal_id, m.name, m.tags
             FROM meal_vote v
             JOIN week w ON w.id=v.week_id AND w.confirmed=1
@@ -1066,20 +1079,25 @@ def sync_healthy_points(conn):
             JOIN person p ON p.id=v.person_id AND p.role!='parent'
             WHERE EXISTS (SELECT 1 FROM week_meal wm WHERE wm.week_id=v.week_id AND wm.meal_id=v.meal_id)
                OR EXISTS (SELECT 1 FROM week_day wd WHERE wd.week_id=v.week_id
-                          AND v.meal_id IN (wd.meal_id, wd.lunch_meal_id))""")):
+                          AND v.meal_id IN (wd.meal_id, wd.lunch_meal_id))""")
+    want = {}
+    for r in rows(votes):
         if healthy & set((r["tags"] or "").split(",")):
             want[(r["person_id"], r["week_id"], r["meal_id"])] = r["name"]
-    have = {(r["person_id"], r["week_id"], r["dow"]): (r["id"], r["tags"]) for r in rows(conn.execute(
-        """SELECT l.id, l.person_id, l.week_id, l.dow, m.tags FROM points_ledger l
-           LEFT JOIN meal m ON m.id=l.dow WHERE l.slot='poll'"""))}
+    have = {(r["person_id"], r["week_id"], r["dow"]): (r["id"], r["tags"], r["confirmed"]) for r in rows(conn.execute(
+        """SELECT l.id, l.person_id, l.week_id, l.dow, m.tags, COALESCE(w.confirmed, 1) confirmed FROM points_ledger l
+           LEFT JOIN meal m ON m.id=l.dow LEFT JOIN week w ON w.id=l.week_id WHERE l.slot='poll'"""))}
     for k, name in want.items():
         if k not in have:
             conn.execute("""INSERT INTO points_ledger(person_id,week_id,dow,slot,delta,reason)
                             VALUES (?,?,?,'poll',1,?)""", (k[0], k[1], k[2], f"voted for {name}"))
-    # Only take a point back when the meal itself is no longer healthy —
-    # a meal later dropped from the shortlist still earned its point.
-    for k, (rid, tags) in have.items():
-        if k not in want and not (healthy & set((tags or "").split(","))):
+    # Take a point back when the meal is no longer healthy; and, while a week is still
+    # open for voting, when the vote itself has been taken back. Once a week is decided
+    # its points stand (a meal later dropped from the shortlist still earned its point).
+    for k, (rid, tags, confirmed) in have.items():
+        if k in want:
+            continue
+        if not (healthy & set((tags or "").split(","))) or (mode == "all" and not confirmed):
             conn.execute("DELETE FROM points_ledger WHERE id=?", (rid,))
     conn.commit()
 
@@ -2016,6 +2034,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "history": history,
                 "myEarned": earned.get(int(person), 0) if person else 0,
                 "healthyTags": [t for t in healthy_tags.split(",") if t],
+                "pointsMode": points_mode(conn),
             })
 
         if path == "/api/history":
@@ -3103,6 +3122,15 @@ class Handler(SimpleHTTPRequestHandler):
                                 VALUES (?,?,?)""",
                              (b["name"], int(b["points_cost"]), b.get("suggested_budget_gbp")))
             conn.commit()
+            return self.send_json({"ok": True})
+
+        if path == "/api/config/points-mode":
+            if not is_admin(conn, b.get("admin_id")):
+                return self.send_json({"error": "Admins only."}, 403)
+            conn.execute("""INSERT INTO config(key,value) VALUES ('points_mode',?)
+                            ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                         ("chosen" if b.get("mode") == "chosen" else "all",))
+            sync_healthy_points(conn)  # past weeks follow the new rule straight away
             return self.send_json({"ok": True})
 
         if path == "/api/config/healthy-tags":
