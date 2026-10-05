@@ -954,16 +954,15 @@ def bored_days(conn):
     return int(r["value"]) if r else 28
 
 
-def last_had(conn, before=None):
-    """meal id -> start date of the latest week it was on the plan: not in the future, or,
-    with `before`, strictly earlier than that date (what the Plan page wants for a given week)."""
+def last_had(conn):
+    """meal id -> start date of the latest week (not in the future) it was on the plan."""
     out = {}
     for r in conn.execute("""
             SELECT meal_id, MAX(start_date) d FROM (
               SELECT wm.meal_id, w.start_date FROM week_meal wm JOIN week w ON w.id=wm.week_id AND w.confirmed=1
               UNION ALL SELECT wd.meal_id, w.start_date FROM week_day wd JOIN week w ON w.id=wd.week_id WHERE wd.meal_id IS NOT NULL
               UNION ALL SELECT wd.lunch_meal_id, w.start_date FROM week_day wd JOIN week w ON w.id=wd.week_id WHERE wd.lunch_meal_id IS NOT NULL
-            ) WHERE start_date < ? GROUP BY meal_id""", (before or (date.today() + timedelta(days=1)).isoformat(),)):
+            ) WHERE start_date < ? GROUP BY meal_id""", ((date.today() + timedelta(days=1)).isoformat(),)):
         out[r["meal_id"]] = r["d"]
     return out
 
@@ -1384,13 +1383,6 @@ def build_week(conn, week_id, viewer_id=None):
         if wd.get("lunch_meal_id"):
             lunch = dict(conn.execute("SELECT * FROM meal WHERE id=?", (wd["lunch_meal_id"],)).fetchone())
         out_days.append({"dow": dow, "meal": meal, "lunch": lunch})
-
-    # When each meal was last on the plan *before* this week (None = first time).
-    had = last_had(conn, before=wk["start_date"])
-    for d in out_days:
-        for k in ("meal", "lunch"):
-            if d[k]:
-                d[k]["lastBefore"] = had.get(d[k]["id"])
 
     return {"week": dict(wk), "days": out_days}
 

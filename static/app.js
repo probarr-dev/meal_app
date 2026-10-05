@@ -884,7 +884,7 @@ async function viewPlan() {
                           // controls remain; the name stays only where it isn't
                           // a duplicate.
                           ? `<span class="simple-meal">Today</span>`
-                          : `<button class="simple-meal meal-peek" data-id="${d.meal.id}" title="See what's in it">${esc(d.meal.name)}</button>${planLastHad(d.meal)}`}
+                          : `<button class="simple-meal meal-peek" data-id="${d.meal.id}" title="See what's in it">${esc(d.meal.name)}</button>`}
                         <span class="day-hidden"><button class="openChange" data-dow="${d.dow}"></button><button class="openSwap" data-dow="${d.dow}"></button><button class="unassign" data-dow="${d.dow}"></button></span>
                         <button class="dayMenu ghost" data-dow="${d.dow}" data-has-meal="1" data-has-lunch="${d.lunch || S.lunchOpen.has(d.dow) ? 1 : 0}" aria-label="Options for this day">⋯</button>`
                      // An empty day can take anything from the library, not just
@@ -897,7 +897,7 @@ async function viewPlan() {
                         </select>
                         ${d.lunch || S.lunchOpen.has(d.dow) ? "" : `<button class="dayMenu ghost" data-dow="${d.dow}" data-has-meal="0" data-has-lunch="0" aria-label="Options for this day">⋯</button>`}`}`
                 : `${d.lunch ? `<span class="tl-lunch">Lunch · <button class="meal-peek" data-id="${d.lunch.id}">${esc(d.lunch.name)}</button></span>` : ""}
-                     ${d.meal ? `<button class="simple-meal meal-peek" data-id="${d.meal.id}" title="See what's in it">${esc(d.meal.name)}</button>${planLastHad(d.meal)}` : `<span class="simple-meal none">Not decided yet</span>`}`}
+                     ${d.meal ? `<button class="simple-meal meal-peek" data-id="${d.meal.id}" title="See what's in it">${esc(d.meal.name)}</button>` : `<span class="simple-meal none">Not decided yet</span>`}`}
             </div>
             ${canEdit(d.dow) ? `<div class="tl-extras">
               <!-- swap picker (parents, on demand), then lunch -->
@@ -1910,19 +1910,11 @@ async function viewRegulars() {
 
 // "Last had 3 weeks ago" and the "bored of this" tap, shown on library cards and the vote list.
 function lastHadText(m) {
-  if (!m.lastHad) return "Not had yet";
+  if (!m.lastHad) return "";
   const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date;
   if (!thisStart) return "";
   const n = Math.round((new Date(thisStart) - new Date(m.lastHad)) / (7 * 86400000));
   return n <= 0 ? "Had this week" : n === 1 ? "Last had last week" : `Last had ${n} weeks ago`;
-}
-// On the Plan page: when this meal was last on the plan before the week being viewed.
-function planLastHad(m) {
-  if (!m) return "";
-  if (!m.lastBefore) return `<span class="plan-lasthad">First time on the plan</span>`;
-  const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date;
-  const n = Math.round((new Date(thisStart) - new Date(m.lastBefore)) / (7 * 86400000));
-  return `<span class="plan-lasthad">${n <= 0 ? "Last had this week" : n === 1 ? "Last had last week" : `Last had ${n} weeks ago`}</span>`;
 }
 function boredHTML(m) {
   const full = m.boredMine ? "You're bored of this one. Tap to undo." : m.boredCount ? `${m.boredCount} bored of this. Tap if you are too.` : "Sick of eating this? Tap to say so (it's not a veto).";
@@ -2050,10 +2042,11 @@ async function viewMeals() {
               ${MEAL_TYPES.filter(([val]) => mealHasType(m, val))
                 .map(([val, label]) => `<span class="tag ${val === "light" ? "tag-protein" : ""}">${esc(label)}</span>`).join("")}
               ${(m.tags || "").split(",").filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}
+              ${lastHadText(m) ? `<span class="tag tag-when">${lastHadText(m)}</span>` : ""}
               ${m.recurring ? `<span class="tag tag-protein">🔁 ${esc(S.people.find((p) => p.id === m.person_id)?.name || "Everyone")}</span>` : ""}
             </div>
             <div class="meal-card-stats">
-              <span class="hint last-had">${lastHadText(m)}</span>
+              
               ${m.costHigh > 0 ? `<span class="meal-cost" title="Share of Aldi pack prices this meal uses${m.unpriced ? `; ${m.unpriced} ingredient${m.unpriced === 1 ? "" : "s"} not priced yet` : ""}">≈ £${m.costLow.toFixed(2)}${m.costHigh - m.costLow >= 0.005 ? `–${m.costHigh.toFixed(2)}` : ""}${m.unpriced ? "+" : ""}</span>` : ""}
               <span class="hint ing-preview">${m.ingredients.length
                 ? esc(m.ingredients.map((i) => i.item).join(", "))
@@ -2374,7 +2367,7 @@ async function viewVote() {
             <span class="vote-body">
               <span class="vote-name">${esc(m.name)}${tagEmojis(m)}</span>
               ${vetoedByAnyone ? `<span class="vote-who vetoed-note">🚫 Vetoed</span>` : m.v.total ? `<span class="vote-who">${voterChips(m.v.voters)}</span>` : ""}
-              ${(() => { const f = S.meals?.find((x) => x.id === m.id); return f ? `<span class="vote-lasthad">${lastHadText(f)}</span>` : ""; })()}
+              ${(() => { const f = S.meals?.find((x) => x.id === m.id); return f && lastHadText(f) ? `<span class="tag tag-when vote-lasthad">${lastHadText(f)}</span>` : ""; })()}
 
             </span>
           </button>
