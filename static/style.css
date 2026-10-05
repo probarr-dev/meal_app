@@ -1545,3 +1545,7 @@ body[data-tab="compare"] main { max-width:1150px; }
 .uc-plus { color:var(--good); font-weight:700; font-size:1rem; line-height:1; }
 .uc-name { font-weight:600; font-size:.9rem; line-height:1.15; white-space:normal; }
 .uc-n { font-size:.7rem; color:var(--muted); }
+
+/* Crisper text on the phone: no fractional letter-spacing (it puts every glyph on a sub-pixel), and ask for precise glyph rendering. */
+:root[data-notepad="1"] body { letter-spacing:0; }
+h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
