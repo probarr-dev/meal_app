@@ -1506,3 +1506,15 @@ body[data-tab="compare"] main { max-width:1150px; }
 
 .tag-when { font-style:italic; opacity:.85; }
 .vote-lasthad { display:inline-block; margin-top:3px; }
+
+/* Notepad theme: the Plan timeline as a sheet of paper, one ruled line under each day. */
+:root[data-notepad="1"] .timeline {
+  background:var(--card); border-radius:6px; box-shadow:0 2px 6px rgba(80,60,20,.18);
+  padding:4px 14px 0 12px; margin-top:8px;
+}
+:root[data-notepad="1"] .timeline::before { display:none; }
+:root[data-notepad="1"] .tl-day { padding:12px 0; border-bottom:1px solid var(--pad-rule); }
+:root[data-notepad="1"] .tl-day:last-child { border-bottom:none; }
+:root[data-notepad="1"] .tl-badge { box-shadow:0 0 0 3px var(--card); }
+:root[data-notepad="1"] .tl-day.is-today .tl-badge { box-shadow:0 0 0 3px var(--card), 0 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent); }
+:root[data-notepad="1"] .tl-day.is-past { padding-bottom:10px; }
