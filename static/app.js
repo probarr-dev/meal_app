@@ -1809,8 +1809,10 @@ async function viewRegulars() {
     ${(() => {
       const usual = extras.filter((e) => (e.prior_weeks || 0) >= 3 && !(parent ? e.active : myAsk[e.item.toLowerCase()]))
         .sort((x, y) => y.prior_weeks - x.prior_weeks).slice(0, 8);
-      return usual.length ? `<div class="usual-row no-print"><span class="hint" style="display:inline">You usually get:</span>
-        ${usual.map((e) => `<button class="usualChip" data-id="${e.id}">＋ ${esc(e.item)}</button>`).join("")}</div>` : "";
+      return usual.length ? `<section class="usual-card no-print">
+        <div class="usual-title">⭐ Your usuals <span class="hint" style="display:inline">swipe · tap to add</span></div>
+        <div class="usual-scroll">${usual.map((e) => `<button class="usualChip" data-id="${e.id}"><span class="uc-plus" aria-hidden="true">＋</span><span class="uc-name">${esc(e.item)}</span><span class="uc-n">${e.prior_weeks}×</span></button>`).join("")}</div>
+      </section>` : "";
     })()}
 
     <div class="card">

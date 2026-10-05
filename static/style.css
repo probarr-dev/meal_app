@@ -1532,3 +1532,16 @@ body[data-tab="compare"] main { max-width:1150px; }
 
 
 .info-btn { background:none; border:none; padding:0 0 0 4px; color:var(--accent); font-size:1rem; line-height:1; cursor:pointer; }
+
+/* "Your usuals": one swipeable row of big, readable tiles instead of a wrapped heap of small pills. */
+.usual-card { margin:0 0 14px; }
+.usual-title { font-weight:700; font-size:.95rem; margin:0 2px 6px; }
+.usual-scroll { display:flex; gap:8px; overflow-x:auto; scroll-snap-type:x proximity; padding:2px 2px 8px;
+  -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+.usual-scroll::-webkit-scrollbar { display:none; }
+.usualChip { flex:0 0 auto; scroll-snap-align:start; display:flex; flex-direction:column; align-items:flex-start; gap:2px;
+  min-width:104px; max-width:150px; min-height:64px; padding:8px 12px; border-radius:12px; text-align:left;
+  background:var(--card); border:1px solid var(--border); border-left:4px solid var(--good); box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.uc-plus { color:var(--good); font-weight:700; font-size:1rem; line-height:1; }
+.uc-name { font-weight:600; font-size:.9rem; line-height:1.15; white-space:normal; }
+.uc-n { font-size:.7rem; color:var(--muted); }
