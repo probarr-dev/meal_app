@@ -412,6 +412,12 @@ def migrate(conn):
         status TEXT NOT NULL DEFAULT 'pending',
         requested_at TEXT DEFAULT (datetime('now')), resolved_at TEXT, resolved_by INTEGER)""")
 
+    # "Bored of this": one tap per person per meal. Shows as a badge; fades after a while.
+    conn.execute("""CREATE TABLE IF NOT EXISTS meal_bored (
+        meal_id INTEGER NOT NULL REFERENCES meal(id) ON DELETE CASCADE,
+        person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+        created_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (meal_id, person_id))""")
+
     # "Takeaway" / "Eating out" — a real day-plan option with deliberately no
     # ingredients, so it needs to be exempt from the "still needs ingredients"
     # nag that every other empty meal correctly gets. Seeded once; never
@@ -940,6 +946,24 @@ def price_links(conn):
     out = {}
     for r in rows(conn.execute("SELECT * FROM price_product ORDER BY price")):
         out.setdefault(r["item_key"], []).append(r)
+    return out
+
+
+def bored_days(conn):
+    r = conn.execute("SELECT value FROM config WHERE key='bored_days'").fetchone()
+    return int(r["value"]) if r else 28
+
+
+def last_had(conn):
+    """meal id -> start date of the latest week (not in the future) it was on the plan."""
+    out = {}
+    for r in conn.execute("""
+            SELECT meal_id, MAX(start_date) d FROM (
+              SELECT wm.meal_id, w.start_date FROM week_meal wm JOIN week w ON w.id=wm.week_id AND w.confirmed=1
+              UNION ALL SELECT wd.meal_id, w.start_date FROM week_day wd JOIN week w ON w.id=wd.week_id WHERE wd.meal_id IS NOT NULL
+              UNION ALL SELECT wd.lunch_meal_id, w.start_date FROM week_day wd JOIN week w ON w.id=wd.week_id WHERE wd.lunch_meal_id IS NOT NULL
+            ) WHERE start_date <= date('now') GROUP BY meal_id"""):
+        out[r["meal_id"]] = r["d"]
     return out
 
 
@@ -1709,6 +1733,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "morrisonsEnabled": morrisons_enabled(conn),
                 "vetoesPerPerson": vetoes_allowed(conn),
                 "extrasNeedPush": extras_need_push(conn),
+                "boredDays": bored_days(conn),
                 "extrasFloodLimit": flood_settings(conn)[0], "extrasFloodTimeoutMin": flood_settings(conn)[1],
                 "lastBackup": (conn.execute("SELECT value FROM config WHERE key='last_backup'").fetchone() or {"value": None})["value"],
                 "allowHistoricEdits": (conn.execute(
@@ -1951,6 +1976,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(body)
 
+        if path == "/api/meals/unused":
+            if self.me["role"] != "parent":
+                return self.send_json({"error": "Parents only."}, 403)
+            weeks = max(1, int(q.get("weeks", ["8"])[0]))
+            had = last_had(conn)
+            cutoff = (date.today() - timedelta(weeks=weeks)).isoformat()
+            unused = []
+            for m in rows(conn.execute("""SELECT id, name, created_at FROM meal WHERE deleted_at IS NULL
+                                          AND COALESCE(recurring,0)=0 AND COALESCE(no_ingredients,0)=0 ORDER BY name""")):
+                ref = max(filter(None, [had.get(m["id"]), (m["created_at"] or "")[:10]]), default="")
+                if ref < cutoff:
+                    unused.append({"id": m["id"], "name": m["name"], "lastHad": had.get(m["id"])})
+            archived = rows(conn.execute("SELECT id, name FROM meal WHERE deleted_at IS NOT NULL ORDER BY name"))
+            return self.send_json({"unused": unused, "archived": archived})
+
         if path == "/api/ideas":
             if self.me["role"] != "parent":
                 return self.send_json({"error": "Parents only."}, 403)
@@ -2022,7 +2062,15 @@ class Handler(SimpleHTTPRequestHandler):
                                      (m["id"], int(viewer))).fetchone()
                     m["my_rating"] = r["stars"] if r else None
             links = price_links(conn)
+            had = last_had(conn)
+            window = f"-{bored_days(conn)} days"
+            bored = {}
+            for r in conn.execute("SELECT meal_id, person_id FROM meal_bored WHERE created_at >= datetime('now', ?)", (window,)):
+                bored.setdefault(r["meal_id"], []).append(r["person_id"])
             for m in out:
+                m["lastHad"] = had.get(m["id"])
+                m["boredCount"] = len(bored.get(m["id"], []))
+                m["boredMine"] = bool(viewer) and int(viewer) in bored.get(m["id"], [])
                 low = high = 0.0
                 unpriced = 0
                 for ing in m["ingredients"]:
@@ -2523,6 +2571,27 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("UPDATE meal SET deleted_at=datetime('now') WHERE id=?", (b["id"],))
             conn.commit()
             return self.send_json({"ok": True})
+
+        if path == "/api/meal/bored":
+            # Anyone, for themselves: tap again to take it back. Not a veto, only a badge.
+            me_id = self.me["id"]
+            if conn.execute("SELECT 1 FROM meal_bored WHERE meal_id=? AND person_id=?", (b["meal_id"], me_id)).fetchone():
+                conn.execute("DELETE FROM meal_bored WHERE meal_id=? AND person_id=?", (b["meal_id"], me_id))
+                on = False
+            else:
+                conn.execute("INSERT INTO meal_bored(meal_id,person_id) VALUES (?,?)", (b["meal_id"], me_id))
+                on = True
+            conn.commit()
+            return self.send_json({"ok": True, "on": on})
+
+        if path == "/api/meals/archive":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Only a parent can edit the meal library."}, 403)
+            ids = [int(i) for i in b.get("ids", [])]
+            if ids:
+                conn.execute(f"UPDATE meal SET deleted_at=datetime('now') WHERE deleted_at IS NULL AND id IN ({','.join('?' * len(ids))})", ids)
+                conn.commit()
+            return self.send_json({"ok": True, "archived": len(ids)})
 
         if path == "/api/meal/restore":
             # Kept deliberately even though nothing calls it yet: with no
@@ -3157,7 +3226,7 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("""INSERT INTO config(key,value) VALUES ('extras_need_push',?)
                                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                              ("1" if int(b["extras_need_push"]) else "0",))
-            for k, hi in (("extras_flood_limit", 99), ("extras_flood_timeout_min", 240)):
+            for k, hi in (("extras_flood_limit", 99), ("extras_flood_timeout_min", 240), ("bored_days", 365)):
                 if k in b:
                     conn.execute("""INSERT INTO config(key,value) VALUES (?,?)
                                     ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

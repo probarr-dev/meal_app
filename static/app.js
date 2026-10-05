@@ -654,6 +654,7 @@ async function boot() {
   S.protectedWeeks = b.protectedWeekIds || [];
   S.allowHistoricEdits = !!b.allowHistoricEdits;
   S.extrasNeedPush = !!b.extrasNeedPush;
+  S.boredDays = b.boredDays ?? 28;
   S.extrasFloodLimit = b.extrasFloodLimit ?? 12; S.extrasFloodTimeoutMin = b.extrasFloodTimeoutMin ?? 15;
   S.lastBackup = b.lastBackup ? JSON.parse(b.lastBackup) : null;
   S.morrisonsEnabled = !!b.morrisonsEnabled;
@@ -1907,6 +1908,60 @@ async function viewRegulars() {
 
 /* ---------------------------------------------------------------- meals */
 
+// "Last had 3 weeks ago" and the "bored of this" tap, shown on library cards and the vote list.
+function lastHadText(m) {
+  if (!m.lastHad) return "Not had yet";
+  const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date;
+  if (!thisStart) return "";
+  const n = Math.round((new Date(thisStart) - new Date(m.lastHad)) / (7 * 86400000));
+  return n <= 0 ? "Had this week" : n === 1 ? "Last had last week" : `Last had ${n} weeks ago`;
+}
+function boredHTML(m) {
+  const full = m.boredMine ? "You're bored of this one. Tap to undo." : m.boredCount ? `${m.boredCount} bored of this. Tap if you are too.` : "Sick of eating this? Tap to say so (it's not a veto).";
+  return `<button class="bored-btn ${m.boredMine ? "on" : ""} ${m.boredCount ? "has" : ""}" data-bored="${m.id}" title="${esc(full)}" aria-label="${esc(full)}" aria-pressed="${m.boredMine ? "true" : "false"}">😴${m.boredCount ? `<span class="bored-n">${m.boredCount}</span>` : ""}</button>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-bored]");
+  if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  try { await api.post("/api/meal/bored", { meal_id: +b.dataset.bored }); }
+  catch (ex) { return toast(ex.message, "bad"); }
+  S.meals = [];
+  route();
+}, true);
+
+async function tidyMeals() {
+  let weeks = lsGet("mealplan-tidy-weeks") || 8;
+  const load = async () => {
+    const { unused, archived } = await api.get(`/api/meals/unused?weeks=${weeks}`);
+    document.getElementById("modalBody").innerHTML = `
+      <label class="field"><span>Not on the plan for</span>
+        <select id="tidyWeeks">${[4, 8, 12, 26].map((n) => `<option value="${n}" ${n === weeks ? "selected" : ""}>${n} weeks</option>`).join("")}</select></label>
+      ${unused.length ? `<div class="tidy-list">${unused.map((m) => `<label class="inline tag-opt tidy-row">
+          <input type="checkbox" class="tidyCb" value="${m.id}"> <span>${esc(m.name)} <span class="hint" style="display:inline">${m.lastHad ? "last had " + esc(m.lastHad) : "never picked"}</span></span></label>`).join("")}</div>
+        <button id="tidyGo" class="primary" style="width:100%" disabled>Archive selected</button>
+        <p class="hint">Archived meals leave the library and the vote list, but you can bring them back from here.</p>`
+        : `<p class="hint">Nothing has gone unused for ${weeks} weeks. 🎉</p>`}
+      ${archived.length ? `<details><summary class="hint">${archived.length} archived</summary>${archived.map((m) => `<div class="tidy-row">${esc(m.name)}
+          <button class="tidyBack ghost" data-id="${m.id}">Bring back</button></div>`).join("")}</details>` : ""}`;
+    document.getElementById("tidyWeeks").onchange = (ev) => { weeks = +ev.target.value; lsSet("mealplan-tidy-weeks", weeks); load(); };
+    const go = document.getElementById("tidyGo");
+    const sync = () => { const n = document.querySelectorAll(".tidyCb:checked").length; go.disabled = !n; go.textContent = n ? `Archive ${n} meal${n === 1 ? "" : "s"}` : "Archive selected"; };
+    document.querySelectorAll(".tidyCb").forEach((cb) => (cb.onchange = sync));
+    if (go) go.onclick = busy(go, async () => {
+      const ids = [...document.querySelectorAll(".tidyCb:checked")].map((c) => +c.value);
+      await api.post("/api/meals/archive", { ids, actor_id: S.meId });
+      S.meals = []; toast(`Archived ${ids.length}.`, "good"); await load(); viewMeals();
+    });
+    document.querySelectorAll(".tidyBack").forEach((bt) => (bt.onclick = busy(bt, async () => {
+      await api.post("/api/meal/restore", { id: +bt.dataset.id, actor_id: S.meId });
+      S.meals = []; toast("Brought back.", "good"); await load(); viewMeals();
+    })));
+  };
+  openModal("🧹 Tidy up meals", `<p class="hint">Loading…</p>`);
+  await load();
+}
+
 // Draft meals kept apart from the library (and from voting) until a parent adds them.
 async function viewIdeas() {
   S.showIdeas = true;
@@ -1957,7 +2012,7 @@ async function viewMeals() {
   const ideaCount = parent ? (await api.get("/api/ideas").catch(() => ({ ideas: [] }))).ideas.length : 0;
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Meal Library</h1>
-      <div class="actions">${parent && ideaCount ? `<button id="ideasBtn" title="Draft meals you can add">💡 <span class="btn-label">Ideas ${ideaCount}</span></button>` : ""}${parent ? `<button id="newMeal" aria-label="New meal" title="New meal"><span aria-hidden="true">+</span><span class="btn-label">New meal</span></button>` : ""}</div></header>
+      <div class="actions">${parent ? `<button id="tidyBtn" title="Archive meals nobody picks"><span aria-hidden="true">🧹</span><span class="btn-label">Tidy up</span></button>` : ""}${parent && ideaCount ? `<button id="ideasBtn" title="Draft meals you can add">💡 <span class="btn-label">Ideas ${ideaCount}</span></button>` : ""}${parent ? `<button id="newMeal" aria-label="New meal" title="New meal"><span aria-hidden="true">+</span><span class="btn-label">New meal</span></button>` : ""}</div></header>
     
 
     <div class="filter-bar">
@@ -1990,6 +2045,7 @@ async function viewMeals() {
               ${m.recurring ? `<span class="tag tag-protein">🔁 ${esc(S.people.find((p) => p.id === m.person_id)?.name || "Everyone")}</span>` : ""}
             </div>
             <div class="meal-card-stats">
+              <span class="hint last-had">${lastHadText(m)}</span>${boredHTML(m)}
               ${m.costHigh > 0 ? `<span class="meal-cost" title="Share of Aldi pack prices this meal uses${m.unpriced ? `; ${m.unpriced} ingredient${m.unpriced === 1 ? "" : "s"} not priced yet` : ""}">≈ £${m.costLow.toFixed(2)}${m.costHigh - m.costLow >= 0.005 ? `–${m.costHigh.toFixed(2)}` : ""}${m.unpriced ? "+" : ""}</span>` : ""}
               <span class="hint ing-preview">${m.ingredients.length
                 ? esc(m.ingredients.map((i) => i.item).join(", "))
@@ -2005,6 +2061,8 @@ async function viewMeals() {
     wireMealRating(el, +el.dataset.id, viewMeals));
   const ideasBtn = document.getElementById("ideasBtn");
   if (ideasBtn) ideasBtn.onclick = viewIdeas;
+  const tidyBtn = document.getElementById("tidyBtn");
+  if (tidyBtn) tidyBtn.onclick = tidyMeals;
 
   const qBox = document.getElementById("mealQ");
   qBox.oninput = (e) => { S.mealFilter.q = e.target.value; viewMeals().then(() => {
@@ -2308,9 +2366,11 @@ async function viewVote() {
             <span class="vote-body">
               <span class="vote-name">${esc(m.name)}${tagEmojis(m)}</span>
               ${vetoedByAnyone ? `<span class="vote-who vetoed-note">🚫 Vetoed</span>` : m.v.total ? `<span class="vote-who">${voterChips(m.v.voters)}</span>` : ""}
+              ${(() => { const f = S.meals?.find((x) => x.id === m.id); return f ? `<span class="vote-lasthad">${lastHadText(f)}</span>` : ""; })()}
 
             </span>
           </button>
+          ${(() => { const f = S.meals?.find((x) => x.id === m.id); return f ? boredHTML(f) : ""; })()}
           ${isMyVeto || (vLeft > 0 && !m.v.total && !vetoedByAnyone) ? `<button class="veto-btn ${isMyVeto ? "on" : ""}" data-veto="${m.id}"
             title="${isMyVeto ? "Undo your veto" : `Veto (${vLeft} left)`}">${isMyVeto ? "↩️" : "🚫"}</button>` : ""}
           ${needsIngredients ? `<div class="vote-ing-warn">
@@ -2599,6 +2659,8 @@ async function viewSettings() {
         <input id="floodLimit" type="number" min="0" max="99" value="${S.extrasFloodLimit}"></label>
       <label class="field"><span>Then a break from asking (minutes)</span>
         <input id="floodMins" type="number" min="0" max="240" value="${S.extrasFloodTimeoutMin}"></label>
+      <label class="field"><span>"Bored of this" taps fade after (days)</span>
+        <input id="boredDays" type="number" min="0" max="365" value="${S.boredDays}"></label>
       <p class="hint">Past about half the limit they get a few "are you sure?" warnings. At the limit their requests
         for the week (and the history of them) are cleared, you're told, and they can't ask again for the break.
         Anything you'd already approved stays on the list. 0 turns this off.</p>
@@ -2861,7 +2923,7 @@ async function viewSettings() {
     if (res.error) return toast(res.error, "bad");
     await boot(); viewSettings();
   });
-  for (const [id, key, msg] of [["floodLimit", "extras_flood_limit", "Request limit saved."], ["floodMins", "extras_flood_timeout_min", "Break length saved."]]) {
+  for (const [id, key, msg] of [["boredDays", "bored_days", "Saved."], ["floodLimit", "extras_flood_limit", "Request limit saved."], ["floodMins", "extras_flood_timeout_min", "Break length saved."]]) {
     const el = document.getElementById(id);
     if (el) el.onchange = async () => {
       try { await api.post("/api/config", { [key]: +el.value || 0, admin_id: p.id }); toast(msg, "good"); await boot(); }

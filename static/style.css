@@ -1492,3 +1492,12 @@ body[data-tab="compare"] main { max-width:1150px; }
 
 .idea-price { margin:4px 0; font-size:.9rem; }
 .meal-cost { display:inline-block; font-weight:700; font-size:.82rem; margin-right:8px; }
+
+.bored-btn { background:none; border:none; font-size:1.05rem; padding:2px 6px; border-radius:999px; opacity:.45; cursor:pointer; flex-shrink:0; align-self:center; }
+.bored-btn:hover, .bored-btn.has { opacity:.9; }
+.bored-btn.on { opacity:1; background:var(--chip-bg, rgba(127,127,127,.18)); }
+.bored-n { font-size:.72rem; font-weight:700; margin-left:2px; }
+.last-had, .vote-lasthad { font-size:.75rem; color:var(--muted); }
+.vote-lasthad { display:block; }
+.tidy-list { max-height:45vh; overflow:auto; margin:8px 0; }
+.tidy-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 0; }
