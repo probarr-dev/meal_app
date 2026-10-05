@@ -1236,7 +1236,7 @@ async function viewShopping() {
     document.getElementById("view").innerHTML = `
       <header class="block-head">
         <h1>🧺 Cupboard check</h1>
-        ${weekNavHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
+        ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
       ${cycleStripHTML("shop")}
       ${lsGet("mealplan-pantry-intro-hidden") ? `<div class="pantry-go no-print">
         <button id="headingOutBtn" class="ghost">✓ Heading to the shop →</button>
@@ -1343,7 +1343,7 @@ async function viewShopping() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>🛒 Shopping List</h1>
-      ${weekNavHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}
+      ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}
       <div class="actions no-print">
         <button id="copyBtn" class="desktop-only" aria-label="Copy list" title="Copy list"><span aria-hidden="true">📋</span><span class="btn-label">Copy</span></button>
         ${navigator.share ? `<button id="shareBtn" aria-label="Export list" title="Export list"><span aria-hidden="true">📤</span><span class="btn-label">Export…</span></button>` : ""}
@@ -1786,7 +1786,8 @@ async function viewRegulars() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>Extras</h1>
-      ${weekBannerHTML(S.weeks.find((w) => w.id === weekId)?.start_date || "")}</header>
+      <span class="week-range week-date">${esc(fmtWeekRange(S.weeks.find((w) => w.id === weekId)?.start_date || ""))}
+        <button id="extrasInfo" class="info-btn" title="What is this date?" aria-label="What is this date?">ⓘ</button></span></header>
     ${!parent ? `<div id="kidPushOffer" class="notice small hidden" style="display:flex;align-items:center;gap:8px">
       🔔 <span>Get a nudge when we're going shopping, so you never miss adding something.</span>
       <button id="kidPushOn" style="margin-left:auto">Turn on</button></div>` : ""}
@@ -1803,8 +1804,6 @@ async function viewRegulars() {
           <button class="xReq ghost" data-id="${r.id}" data-d="deny">Say no</button>
         </div>`).join("")}</div></section>` : ""}
     ${cycleStripHTML("shop")}
-    <div class="notice pantry-intro">🛒 Adding to your <strong>next shop</strong>
-      (${esc(fmtWeekRange(S.weeks.find((w) => w.id === weekId)?.start_date || ""))}).</div>
 
     <button id="openAddExtra" class="plan-done-btn no-print" style="position:static;margin:0 0 12px">＋ Add item</button>
     ${(() => {
@@ -1843,6 +1842,9 @@ async function viewRegulars() {
   // reflows the page. Rather than hand-patching the DOM (and risking it drift
   // out of step with the server), put the button you just pressed back exactly
   // where your finger left it. Works no matter what changed above it.
+  document.getElementById("extrasInfo").onclick = () => openModal("Adding to your next shop",
+    `<p>Anything you add here goes on the shop for <strong>${esc(fmtWeekRange(S.weeks.find((w) => w.id === weekId)?.start_date || ""))}</strong>, the next one that hasn't been done yet.</p>
+     <p class="hint">Once that shop is finished, new items move on to the one after.</p>`);
   document.getElementById("openAddExtra").onclick = () => {
     openModal("Add an item", addExtraHTML());
     wireAddExtra(viewRegulars, weekId);

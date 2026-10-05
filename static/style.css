@@ -1529,3 +1529,6 @@ body[data-tab="compare"] main { max-width:1150px; }
 .pantry-go { display:flex; align-items:center; gap:8px; margin:0 0 10px; }
 .pantry-intro { position:relative; }
 .notice .pantry-x { position:absolute; top:2px; right:2px; left:auto; display:block; width:auto; min-height:0; margin:0 !important; background:none; border:none; color:var(--muted); font-size:.95rem; font-weight:400; padding:6px 10px; }
+
+
+.info-btn { background:none; border:none; padding:0 0 0 4px; color:var(--accent); font-size:1rem; line-height:1; cursor:pointer; }
