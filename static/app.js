@@ -2053,7 +2053,7 @@ async function viewMeals() {
               ${m.recurring ? `<span class="tag tag-protein">🔁 ${esc(S.people.find((p) => p.id === m.person_id)?.name || "Everyone")}</span>` : ""}
             </div>
             <div class="meal-card-stats">
-              <span class="hint last-had">${lastHadText(m)}</span>${boredHTML(m)}
+              <span class="hint last-had">${lastHadText(m)}</span>
               ${m.costHigh > 0 ? `<span class="meal-cost" title="Share of Aldi pack prices this meal uses${m.unpriced ? `; ${m.unpriced} ingredient${m.unpriced === 1 ? "" : "s"} not priced yet` : ""}">≈ £${m.costLow.toFixed(2)}${m.costHigh - m.costLow >= 0.005 ? `–${m.costHigh.toFixed(2)}` : ""}${m.unpriced ? "+" : ""}</span>` : ""}
               <span class="hint ing-preview">${m.ingredients.length
                 ? esc(m.ingredients.map((i) => i.item).join(", "))
