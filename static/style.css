@@ -1501,3 +1501,5 @@ body[data-tab="compare"] main { max-width:1150px; }
 .vote-lasthad { display:block; }
 .tidy-list { max-height:45vh; overflow:auto; margin:8px 0; }
 .tidy-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 0; }
+
+.plan-lasthad { display:block; font-size:.75rem; color:var(--muted); margin-top:1px; }
