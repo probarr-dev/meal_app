@@ -1914,7 +1914,7 @@ function lastHadText(m) {
   const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date;
   if (!thisStart) return "";
   const n = Math.round((new Date(thisStart) - new Date(m.lastHad)) / (7 * 86400000));
-  return n <= 0 ? "Had this week" : n === 1 ? "Last had last week" : `Last had ${n} weeks ago`;
+  return n <= 0 ? "Earlier this week" : n === 1 ? "Last had last week" : `Last had ${n} weeks ago`;
 }
 function boredHTML(m) {
   const full = m.boredMine ? "You're bored of this one. Tap to undo." : m.boredCount ? `${m.boredCount} bored of this. Tap if you are too.` : "Sick of eating this? Tap to say so (it's not a veto).";
