@@ -1552,4 +1552,4 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 
 /* iOS softens whatever sits in the top strip of the screen (the same blur you see while scrolling).
    Start the page content just below that strip, so headings are sharp at rest and only soften as they scroll up into it. */
-@media (max-width:700px) { main { padding-top:16px; } }
+@media (max-width:700px) { main { padding-top:18px; } }
