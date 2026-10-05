@@ -1518,3 +1518,14 @@ body[data-tab="compare"] main { max-width:1150px; }
 :root[data-notepad="1"] .tl-badge { box-shadow:0 0 0 3px var(--card); }
 :root[data-notepad="1"] .tl-day.is-today .tl-badge { box-shadow:0 0 0 3px var(--card), 0 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent); }
 :root[data-notepad="1"] .tl-day.is-past { padding-bottom:10px; }
+
+/* The week you're looking at is the most important context on every page: make it stand out. */
+.week-date {
+  color:var(--text); font-weight:700;
+  background:color-mix(in srgb, var(--accent) 14%, transparent);
+  padding:3px 12px; border-radius:999px;
+}
+.week-date .weekNavBtn { color:var(--accent); font-weight:700; }
+.pantry-go { display:flex; align-items:center; gap:8px; margin:0 0 10px; }
+.pantry-intro { position:relative; }
+.notice .pantry-x { position:absolute; top:2px; right:2px; left:auto; display:block; width:auto; min-height:0; margin:0 !important; background:none; border:none; color:var(--muted); font-size:.95rem; font-weight:400; padding:6px 10px; }

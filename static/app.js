@@ -459,7 +459,7 @@ const fmtWeekRange = (startISO) => {
 const weekNavHTML = (startISO) => {
   if (!startISO) return "";
   const onNext = S.weekId === S.nextWeekId;
-  return `<span class="week-range week-nav">
+  return `<span class="week-range week-date week-nav">
     <button class="weekNavBtn" data-to="this" ${onNext ? "" : "disabled"} aria-label="This week">‹</button>
     ${esc(fmtWeekRange(startISO))}
     <button class="weekNavBtn" data-to="next" ${onNext ? "disabled" : ""} aria-label="Next week">›</button></span>`;
@@ -473,7 +473,7 @@ document.addEventListener("click", (e) => {
 const meBadge = () => me() ? `<span class="me-badge" title="Signed in as ${esc(me().name)}">${me().emoji ? esc(me().emoji) : esc(me().name[0])}</span>` : "";
 
 const weekBannerHTML = (startISO) =>
-  startISO ? `<span class="week-range">${esc(fmtWeekRange(startISO))}</span>` : "";
+  startISO ? `<span class="week-range week-date">${esc(fmtWeekRange(startISO))}</span>` : "";
 
 // Average of the last 6 shops with a real total typed in.
 function shopAverage() {
@@ -1238,12 +1238,16 @@ async function viewShopping() {
         <h1>🧺 Cupboard check</h1>
         ${weekNavHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
       ${cycleStripHTML("shop")}
+      ${lsGet("mealplan-pantry-intro-hidden") ? `<div class="pantry-go no-print">
+        <button id="headingOutBtn" class="ghost">✓ Heading to the shop →</button>
+        <button id="pantryHelp" class="link-btn" title="Show the instructions" aria-label="Show the instructions">ⓘ</button></div>` : `
       <div class="notice good no-print pantry-intro">
+        <button id="pantryDismiss" class="pantry-x" title="Got it, hide this" aria-label="Hide these instructions">✕</button>
         <strong>Step 1 of 2 — before you go.</strong><br>
         Tick everything you've <strong>already got</strong> at home. Ticked items come off the shopping list.
         Come back to this any time before you go.
         <button id="headingOutBtn" class="ghost">✓ Heading to the shop →</button>
-      </div>
+      </div>`}
       <div class="notice small shop-estimate" id="pantrySummary"></div>
       <div class="card">
         ${groups.map((g) => `
@@ -1266,6 +1270,8 @@ async function viewShopping() {
       showSavings();
       await api.post("/api/pantry-tick", { week_id: S.weekId, item: cb.dataset.item, checked: cb.checked ? 1 : 0 });
     })));
+    const flip = (id, hidden) => { const el = document.getElementById(id); if (el) el.onclick = () => { lsSet("mealplan-pantry-intro-hidden", hidden); viewShopping(); }; };
+    flip("pantryDismiss", 1); flip("pantryHelp", 0);
     const headingOut = document.getElementById("headingOutBtn");
     if (headingOut) headingOut.onclick = busy(headingOut, async () => {
       await api.post("/api/week/shopping-phase", { week_id: S.weekId, phase: "shopping" });
@@ -2303,7 +2309,7 @@ async function viewVote() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>Vote ${meBadge()}</h1>
-      <span class="week-range">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
+      <span class="week-range week-date">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
     ${parent && S.votingOpen && picks.some((x) => x.id !== S.meId && x.used < target) ? `<div class="remind-row">
       <span class="hint">Still to vote · tap to remind</span>
