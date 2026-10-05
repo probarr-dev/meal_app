@@ -32,6 +32,9 @@ class Points(unittest.TestCase):
         c.execute("DELETE FROM points_ledger"); c.commit()
         server.sync_healthy_points(c)
         self.assertEqual(bal(), 1)  # chosen-only: just the salad
+        c.execute("UPDATE meal SET tags='' WHERE name='PtsSalad'"); c.commit()
+        server.sync_healthy_points(c)
+        self.assertEqual(bal(), 1)  # re-tagging a meal later doesn't take earned points back
 
 
 if __name__ == "__main__":

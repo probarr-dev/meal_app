@@ -425,24 +425,31 @@ def migrate(conn):
 
 def seed_ideas(conn):
     """Draft meal ideas (ideas.json) that sit apart from the library until someone adds them.
-    Seeded once; dismissed ones stay dismissed."""
+    Each idea has a batch number; a batch is offered once, so dismissed ideas stay dismissed
+    and new batches (added to the file later) appear on their own."""
     conn.execute("""CREATE TABLE IF NOT EXISTS meal_idea (
         id INTEGER PRIMARY KEY, name TEXT NOT NULL, tags TEXT DEFAULT '', meal_type TEXT DEFAULT 'proper',
         note TEXT DEFAULT '', ingredients TEXT NOT NULL DEFAULT '[]')""")
-    if conn.execute("SELECT 1 FROM config WHERE key='ideas_seeded'").fetchone():
-        return
+    row = conn.execute("SELECT value FROM config WHERE key='ideas_batch'").fetchone()
+    done = int(row["value"]) if row else (1 if conn.execute(
+        "SELECT 1 FROM config WHERE key='ideas_seeded'").fetchone() else 0)
     try:
         with open(os.path.join(HERE, "ideas.json"), encoding="utf-8") as f:
             ideas = json.load(f)["meals"]
     except (OSError, ValueError, KeyError):
         return
-    have = {r["name"].lower() for r in conn.execute("SELECT name FROM meal")}
+    top = max([m.get("batch", 1) for m in ideas] or [1])
+    if top <= done:
+        return
+    have = {r["name"].lower() for r in conn.execute("SELECT name FROM meal")} | {
+        r["name"].lower() for r in conn.execute("SELECT name FROM meal_idea")}
     for m in ideas:
-        if m["name"].lower() not in have:
+        if m.get("batch", 1) > done and m["name"].lower() not in have:
             conn.execute("INSERT INTO meal_idea(name,tags,meal_type,note,ingredients) VALUES (?,?,?,?,?)",
                          (m["name"], m.get("tags", ""), m.get("meal_type", "proper"), m.get("note", ""),
                           json.dumps(m.get("ingredients", []))))
-    conn.execute("INSERT INTO config(key,value) VALUES ('ideas_seeded','1')")
+    conn.execute("""INSERT INTO config(key,value) VALUES ('ideas_batch',?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (str(top),))
 
 
 def init_db():
@@ -1058,8 +1065,8 @@ def points_mode(conn):
 
 
 def sync_healthy_points(conn):
-    """Healthy-vote points are derived, not one-off: re-apply the current healthy tags and the
-    household's points rule to every week, so re-tagging a meal or changing the rule fixes history."""
+    """Healthy-vote points: add any that are due under the current healthy tags and points rule.
+    Switching the rule or tagging more meals healthy back-fills; nothing already earned is removed."""
     healthy = {t.strip() for t in ((conn.execute(
         "SELECT value FROM config WHERE key='healthy_tags'").fetchone() or {"value": ""})["value"] or "").split(",")
         if t.strip()}
@@ -1091,13 +1098,11 @@ def sync_healthy_points(conn):
         if k not in have:
             conn.execute("""INSERT INTO points_ledger(person_id,week_id,dow,slot,delta,reason)
                             VALUES (?,?,?,'poll',1,?)""", (k[0], k[1], k[2], f"voted for {name}"))
-    # Take a point back when the meal is no longer healthy; and, while a week is still
-    # open for voting, when the vote itself has been taken back. Once a week is decided
-    # its points stand (a meal later dropped from the shortlist still earned its point).
+    # Earned points stand: re-tagging a meal later doesn't take them back. The only point
+    # that goes is one for a vote taken back while its week is still open for voting.
     for k, (rid, tags, confirmed) in have.items():
-        if k in want:
-            continue
-        if not (healthy & set((tags or "").split(","))) or (mode == "all" and not confirmed):
+        if k not in want and not confirmed and not conn.execute(
+                "SELECT 1 FROM meal_vote WHERE person_id=? AND week_id=? AND meal_id=?", k).fetchone():
             conn.execute("DELETE FROM points_ledger WHERE id=?", (rid,))
     conn.commit()
 

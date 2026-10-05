@@ -25,7 +25,8 @@
      "unit": "pack",
      "aisle": "Frozen"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Toad in the Hole",
@@ -75,7 +76,8 @@
      "unit": "pack",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Cottage Pie",
@@ -125,7 +127,8 @@
      "unit": "pack",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Shepherd's Pie",
@@ -169,7 +172,8 @@
      "unit": "pack",
      "aisle": "Frozen"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Lasagne",
@@ -213,7 +217,8 @@
      "unit": "pack",
      "aisle": "Frozen"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Macaroni Cheese",
@@ -251,7 +256,8 @@
      "unit": "unit",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken Fajitas",
@@ -295,7 +301,8 @@
      "unit": "jar",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Beef Tacos",
@@ -339,7 +346,8 @@
      "unit": "jar",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Cheese Quesadillas",
@@ -377,7 +385,8 @@
      "unit": "jar",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken Tikka Masala",
@@ -415,7 +424,8 @@
      "unit": "pack",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Sausage Casserole",
@@ -459,7 +469,8 @@
      "unit": "pack",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Spaghetti Carbonara",
@@ -497,12 +508,13 @@
      "unit": "pot",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken Pesto Pasta",
    "meal_type": "proper",
-   "tags": "Quick,Healthy",
+   "tags": "Quick",
    "note": "Add cherry tomatoes and spinach.",
    "ingredients": [
     {
@@ -535,7 +547,8 @@
      "unit": "bag",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Salmon, New Potatoes & Greens",
@@ -573,7 +586,8 @@
      "unit": "unit",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chickpea & Veg Curry",
@@ -617,7 +631,8 @@
      "unit": "pack",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Veggie Bean Chilli",
@@ -661,7 +676,8 @@
      "unit": "pack",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken & Veg Traybake",
@@ -699,7 +715,8 @@
      "unit": "pack",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Sausage & Veg Traybake",
@@ -737,7 +754,8 @@
      "unit": "pack",
      "aisle": "Fresh Produce"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Egg Fried Rice",
@@ -775,7 +793,8 @@
      "unit": "bottle",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Gammon, Egg & Chips",
@@ -807,7 +826,8 @@
      "unit": "pack",
      "aisle": "Frozen"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Tomato & Cheese Pasta Bake",
@@ -845,7 +865,8 @@
      "unit": "tin",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken Nuggets, Chips & Beans",
@@ -871,7 +892,8 @@
      "unit": "tin",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Meatballs & Spaghetti",
@@ -903,7 +925,8 @@
      "unit": "pack",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Beef Stew & Dumplings",
@@ -941,7 +964,8 @@
      "unit": "pack",
      "aisle": "Cupboard"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Roast Pork Dinner",
@@ -991,7 +1015,8 @@
      "unit": "pack",
      "aisle": "Frozen"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Fish Pie",
@@ -1029,7 +1054,8 @@
      "unit": "pack",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Chicken Caesar Wraps",
@@ -1067,7 +1093,8 @@
      "unit": "pack",
      "aisle": "Dairy & Chilled"
     }
-   ]
+   ],
+   "batch": 1
   },
   {
    "name": "Naan Bread Pizzas",
@@ -1104,6 +1131,511 @@
      "amount": 1,
      "unit": "tin",
      "aisle": "Cupboard"
+    }
+   ],
+   "batch": 1
+  },
+  {
+   "name": "Steak, Tenderstem & Salad",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb,Quick",
+   "note": "Sirloin cooked how everyone likes it. A few new potatoes are optional.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Sirloin steaks",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Tenderstem broccoli",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cherry tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Rocket",
+     "amount": 1,
+     "unit": "bag",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Butter",
+     "amount": 0.25,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Baked Salmon, Asparagus & Broccoli",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Lemon and a little butter in the foil.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Salmon fillets",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Asparagus",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tenderstem broccoli",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Lemon",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Butter",
+     "amount": 0.25,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "King Prawn & Veg Stir Fry",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb,Quick",
+   "note": "Cauliflower rice instead of noodles.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "King prawns",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Stir-fry veg",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cauliflower rice",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Soy sauce",
+     "amount": 1,
+     "unit": "bottle",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Garlic",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Lamb Steaks & Greek Salad",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Feta, olives, cucumber and tomato.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Lamb leg steaks",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Cucumber",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Feta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Olives",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Red onion",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Turkey Burgers & Salad",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "No bun: lettuce, tomato, a little cheese.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Turkey mince",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Eggs",
+     "amount": 0.5,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Lettuce",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cucumber",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 0.25,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Tuna Niçoise Salad",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb,Quick",
+   "note": "Tuna steaks, eggs, green beans and a few new potatoes.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Tuna steaks",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Green beans",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "New potatoes",
+     "amount": 0.5,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cherry tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Olives",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Baked Cod, Roasted Veg & Lentils",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Cod loin over a tray of roasted veg and a pouch of lentils.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Cod loin",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Courgettes",
+     "amount": 2,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cherry tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cooked lentils",
+     "amount": 2,
+     "unit": "pouch",
+     "aisle": "Cupboard"
+    }
+   ]
+  },
+  {
+   "name": "Thai Green Chicken & Veg Curry",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Cauliflower rice, loads of veg.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Chicken Breast",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Thai green curry paste",
+     "amount": 1,
+     "unit": "jar",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Coconut milk",
+     "amount": 2,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Green beans",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Pak choi",
+     "amount": 2,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cauliflower rice",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Spinach & Feta Frittata",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb,Quick",
+   "note": "Eggs, spinach, peppers; a big salad on the side.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Eggs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Spinach",
+     "amount": 2,
+     "unit": "bag",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Feta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Peppers",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Lettuce",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Cucumber",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Mince-Stuffed Peppers",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Lean mince, tomatoes and cheese in baked peppers.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Beef Mince",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Peppers",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tinned Tomatoes",
+     "amount": 1,
+     "unit": "tin",
+     "aisle": "Cupboard"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Grated Cheese",
+     "amount": 0.5,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    }
+   ]
+  },
+  {
+   "name": "Pork Tenderloin, Roast Veg & Greens",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Lean pork roasted on a tray of veg.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Pork tenderloin",
+     "amount": 2,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Carrots",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Courgettes",
+     "amount": 2,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tenderstem broccoli",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Onions",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    }
+   ]
+  },
+  {
+   "name": "Chicken Souvlaki & Greek Salad",
+   "meal_type": "proper",
+   "tags": "Healthy,Low carb",
+   "note": "Skewers of chicken thigh, salad, a little tzatziki.",
+   "batch": 2,
+   "ingredients": [
+    {
+     "item": "Chicken thighs",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Meat & Fish"
+    },
+    {
+     "item": "Tzatziki",
+     "amount": 1,
+     "unit": "tub",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Cucumber",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Tomatoes",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Fresh Produce"
+    },
+    {
+     "item": "Feta",
+     "amount": 1,
+     "unit": "pack",
+     "aisle": "Dairy & Chilled"
+    },
+    {
+     "item": "Red onion",
+     "amount": 1,
+     "unit": "unit",
+     "aisle": "Fresh Produce"
     }
    ]
   }
