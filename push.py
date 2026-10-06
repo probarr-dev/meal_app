@@ -31,6 +31,8 @@ KINDS = {
     "voting_reminder": {"label": "Reminder if I haven't voted", "parents_only": False},
     "plan_final": {"label": "Next week's meals are set", "parents_only": False},
     "extra_request": {"label": "A child asks for an extra", "parents_only": True},
+    "reward_request": {"label": "A child asks for a reward", "parents_only": True},
+    "reward_decision": {"label": "My reward request is answered", "parents_only": False},
 }
 
 CONTACT = os.environ.get("PUSH_CONTACT", "mailto:admin@localhost")

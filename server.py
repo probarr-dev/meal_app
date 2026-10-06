@@ -264,6 +264,11 @@ def migrate(conn):
         status TEXT NOT NULL DEFAULT 'pending',
         budget_gbp REAL, note TEXT DEFAULT '',
         requested_at TEXT DEFAULT (datetime('now')), resolved_at TEXT, resolved_by INTEGER)""")
+    # A request can come with a meal swap: put this meal on this day if it's approved.
+    have_cols = [r["name"] for r in conn.execute("PRAGMA table_info(redemption)")]
+    for col in ("swap_week_id", "swap_dow", "swap_meal_id"):
+        if col not in have_cols:
+            conn.execute(f"ALTER TABLE redemption ADD COLUMN {col} INTEGER")
     if not conn.execute("SELECT 1 FROM reward LIMIT 1").fetchone():
         conn.execute("""INSERT INTO reward(name,points_cost,suggested_budget_gbp) VALUES
             ('Takeaway of my choice', 20, 15),
@@ -1178,6 +1183,19 @@ def receipt_list_items(conn, week_id):
 def log_extra(conn, person_id, item, week_id, action):
     conn.execute("INSERT INTO extra_log(person_id,item,week_id,action) VALUES (?,?,?,?)",
                  (person_id or None, item, week_id, action))
+
+
+def apply_swap(conn, week_id, dow, meal_id):
+    conn.execute("INSERT OR IGNORE INTO week_day(week_id,dow) VALUES (?,?)", (week_id, dow))
+    conn.execute("UPDATE week_day SET meal_id=? WHERE week_id=? AND dow=?", (meal_id, week_id, dow))
+
+
+def points_available(conn, person_id):
+    """Balance minus what's already promised to this person's pending requests."""
+    bal = conn.execute("SELECT COALESCE(SUM(delta),0) b FROM points_ledger WHERE person_id=?", (person_id,)).fetchone()["b"]
+    held = conn.execute("""SELECT COALESCE(SUM(r.points_cost),0) h FROM redemption rd JOIN reward r ON r.id=rd.reward_id
+                           WHERE rd.person_id=? AND rd.status='pending'""", (person_id,)).fetchone()["h"]
+    return bal - held
 
 
 def reward_next_available(conn, person_id, reward):
@@ -3298,25 +3316,38 @@ class Handler(SimpleHTTPRequestHandler):
                          (b["person_id"], -reward["points_cost"],
                           f"redeemed: {reward['name']}" + (f" — {b['note']}" if b.get("note") else "")))
             if b.get("swap_week_id") and b.get("swap_meal_id") is not None and b.get("swap_dow") is not None:
-                conn.execute("INSERT OR IGNORE INTO week_day(week_id,dow) VALUES (?,?)",
-                             (b["swap_week_id"], b["swap_dow"]))
-                conn.execute("UPDATE week_day SET meal_id=? WHERE week_id=? AND dow=?",
-                             (b["swap_meal_id"], b["swap_week_id"], b["swap_dow"]))
+                apply_swap(conn, b["swap_week_id"], b["swap_dow"], b["swap_meal_id"])
             conn.commit()
             return self.send_json({"ok": True})
 
         if path == "/api/redemption/request":
-            return self.send_json({"error": "Ask a parent — they redeem rewards now."}, 403)
-            bal = conn.execute("SELECT SUM(delta) b FROM points_ledger WHERE person_id=?",
-                               (b["person_id"],)).fetchone()["b"] or 0
-            reward = conn.execute("SELECT * FROM reward WHERE id=?", (b["reward_id"],)).fetchone()
+            # A child (or anyone) asks; a parent approves. Points are only taken when it's approved.
+            pid = b["person_id"]
+            reward = conn.execute("SELECT * FROM reward WHERE id=? AND active=1", (b["reward_id"],)).fetchone()
             if not reward:
                 return self.send_json({"error": "Not a real reward."}, 400)
-            if bal < reward["points_cost"]:
-                return self.send_json({"error": f"Needs {reward['points_cost']} points, only has {bal}."}, 400)
-            conn.execute("""INSERT INTO redemption(person_id,reward_id,note) VALUES (?,?,?)""",
-                         (b["person_id"], b["reward_id"], b.get("note", "")))
+            if conn.execute("SELECT 1 FROM redemption WHERE person_id=? AND reward_id=? AND status='pending'", (pid, reward["id"])).fetchone():
+                return self.send_json({"error": "You've already asked for that one. A parent will answer soon."}, 400)
+            avail = points_available(conn, pid)
+            if avail < reward["points_cost"]:
+                return self.send_json({"error": f"Needs {reward['points_cost']} points, only {avail} free to spend."}, 400)
+            nxt = reward_next_available(conn, pid, reward)
+            if nxt:
+                return self.send_json({"error": f"That one is limited to every {reward['limit_days']} days. "
+                                                f"The next can be from {date.fromisoformat(nxt).strftime('%-d %b')}."}, 400)
+            sw = (b.get("swap_week_id"), b.get("swap_dow"), b.get("swap_meal_id"))
+            if any(v is not None for v in sw):
+                ids = cycle(conn)
+                m = conn.execute("SELECT name FROM meal WHERE id=? AND deleted_at IS NULL", (sw[2],)).fetchone() if sw[2] is not None else None
+                if (None in sw or sw[0] not in (ids["thisWeekId"], ids["nextWeekId"]) or not (0 <= int(sw[1]) <= 6)
+                        or not m or not re.search(r"takeaway|eating out|restaurant", m["name"], re.I)):
+                    return self.send_json({"error": "That swap isn't allowed. Pick a day this week or next, and a takeaway or eating-out meal."}, 400)
+            conn.execute("""INSERT INTO redemption(person_id,reward_id,note,swap_week_id,swap_dow,swap_meal_id)
+                            VALUES (?,?,?,?,?,?)""", (pid, reward["id"], b.get("note", ""), *sw))
             conn.commit()
+            who = conn.execute("SELECT name FROM person WHERE id=?", (pid,)).fetchone()["name"]
+            push.notify(conn, db, push.people(conn, role="parent"), "reward_request", "Reward request 🎁",
+                        f"{who} would like: {reward['name']}" + (f" ({b['note']})" if b.get("note") else ""), "/#/rewards")
             return self.send_json({"ok": True})
 
         if path == "/api/redemption/resolve":
@@ -3329,18 +3360,31 @@ class Handler(SimpleHTTPRequestHandler):
             rd = conn.execute("SELECT * FROM redemption WHERE id=?", (b["id"],)).fetchone()
             if not rd or rd["status"] != "pending":
                 return self.send_json({"error": "Already resolved."}, 400)
+            reward = conn.execute("SELECT * FROM reward WHERE id=?", (rd["reward_id"],)).fetchone()
             if b["decision"] == "approve":
-                reward = conn.execute("SELECT * FROM reward WHERE id=?", (rd["reward_id"],)).fetchone()
+                bal = conn.execute("SELECT COALESCE(SUM(delta),0) b FROM points_ledger WHERE person_id=?", (rd["person_id"],)).fetchone()["b"]
+                if bal < reward["points_cost"]:
+                    return self.send_json({"error": f"They only have {bal} points now, so that can't be approved."}, 400)
+                nxt = reward_next_available(conn, rd["person_id"], reward)
+                if nxt:
+                    return self.send_json({"error": f"Limited to every {reward['limit_days']} days; the next can be from {date.fromisoformat(nxt).strftime('%-d %b')}."}, 400)
                 conn.execute("""INSERT INTO points_ledger(person_id,delta,reason) VALUES (?,?,?)""",
-                             (rd["person_id"], -reward["points_cost"], f"redeemed: {reward['name']}"))
+                             (rd["person_id"], -reward["points_cost"],
+                              f"redeemed: {reward['name']}" + (f" — {rd['note']}" if rd["note"] else "")))
                 conn.execute("""UPDATE redemption SET status='approved', budget_gbp=?,
                                 resolved_at=datetime('now'), resolved_by=? WHERE id=?""",
                              (b.get("budget_gbp"), b["resolver_id"], b["id"]))
+                if rd["swap_week_id"] is not None and rd["swap_meal_id"] is not None and rd["swap_dow"] is not None:
+                    apply_swap(conn, rd["swap_week_id"], rd["swap_dow"], rd["swap_meal_id"])
             else:
                 conn.execute("""UPDATE redemption SET status='denied',
                                 resolved_at=datetime('now'), resolved_by=? WHERE id=?""",
                              (b["resolver_id"], b["id"]))
             conn.commit()
+            ok = b["decision"] == "approve"
+            push.notify(conn, db, [rd["person_id"]], "reward_decision",
+                        "Reward approved 🎉" if ok else "Reward not this time",
+                        f"{reward['name']}" + (" is on!" if ok else " — ask a parent about it."), "/#/rewards")
             return self.send_json({"ok": True})
 
         if path == "/api/reward/save":

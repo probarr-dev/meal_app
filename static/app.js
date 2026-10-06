@@ -3038,6 +3038,8 @@ async function viewRewards() {
   const parent = isParent();
   const nameOf = (id) => S.people.find((p) => p.id === id)?.name || "?";
   const pending = requests.filter((r) => r.status === "pending");
+  const myAsked = new Set(pending.filter((r) => r.person_id === S.meId).map((r) => r.reward_id));
+  const myFree = myBalance - pending.filter((r) => r.person_id === S.meId).reduce((s, r) => s + r.points_cost, 0);
 
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Rewards</h1></header>
@@ -3069,6 +3071,9 @@ async function viewRewards() {
           <div class="hint">${Math.ceil(r.points_cost / 3)} weeks of voting for 3 healthy meals a week</div>
           ${limit ? `<div class="hint"><strong>${limit}</strong></div>` : ""}
           ${parent ? "" : `<div class="hint reward-guide">${guide}</div>`}
+          ${!parent && enough && !waiting && !myAsked.has(r.id) && myFree >= r.points_cost
+            ? `<button class="askReward primary" data-id="${r.id}" data-name="${esc(r.name)}">🎁 Ask for this</button>` : ""}
+          ${!parent && myAsked.has(r.id) ? `<div class="hint"><strong>Asked ✓ waiting on a parent</strong></div>` : ""}
         </div>`; }).join("")}
     </div>
 
@@ -3211,6 +3216,36 @@ async function viewRewards() {
     if (res.error) return toast(res.error, "bad");
     viewRewards();
   })));
+  document.querySelectorAll(".askReward").forEach((b) => (b.onclick = async () => {
+    const [tw, nw] = await Promise.all([S.thisWeekId, S.nextWeekId].map((id) => api.get(`/api/week?id=${id}`).catch(() => null)));
+    if (!S.meals.length) S.meals = (await api.get(`/api/meals?person=${S.meId || ""}`)).meals;
+    const swapMeals = S.meals.filter((m) => /takeaway|eating out|restaurant/i.test(m.name));
+    const dayChoices = [[S.thisWeekId, tw], [S.nextWeekId, nw]].flatMap(([wid, wk]) =>
+      (wk?.days || []).map((d) => { const dt = new Date((wk.week?.start_date || "") + "T00:00"); dt.setDate(dt.getDate() + d.dow); return { ...d, dt }; })
+        .filter((d) => { const t = new Date(); t.setHours(0, 0, 0, 0); return isNaN(d.dt) || d.dt >= t; })
+        .map((d) => `<option value="${wid}:${d.dow}" data-when="${esc(d.dt.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }))}">${esc(d.dt.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" }))}${d.meal ? ` (instead of ${esc(d.meal.name)})` : " (empty)"}</option>`));
+    openModal(`Ask for: ${b.dataset.name}`, `
+      <p class="hint">A parent will say yes or no. Your points are only used if they say yes.</p>
+      ${swapMeals.length && /takeaway|restaurant|eat/i.test(b.dataset.name) ? `<label class="field"><span>Which day would you like it?</span>
+        <select id="askDay"><option value="">— not sure yet —</option>${dayChoices.join("")}</select></label>
+      <label class="field"><span>Instead of the meal that day, have</span><select id="askMeal">${swapMeals.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select></label>` : ""}
+      <label class="field"><span>Anything specific?</span><input id="askNote" placeholder='e.g. "Pizza from the Italian place"' maxlength="80"></label>
+      <div class="modal-actions"><button id="askGo" class="primary">Send to a parent</button></div>`);
+    const mSel = document.getElementById("askMeal");
+    if (mSel) { const want = /restaurant|eat/i.test(b.dataset.name) ? /eating out|restaurant/i : /takeaway/i; const hit = [...mSel.options].find((o) => want.test(o.text)); if (hit) mSel.value = hit.value; }
+    const go = document.getElementById("askGo");
+    go.onclick = busy(go, async () => {
+      const day = document.getElementById("askDay")?.value;
+      const typed = document.getElementById("askNote").value.trim();
+      const when = day ? document.getElementById("askDay").selectedOptions[0].dataset.when : "";
+      const note = [day ? `${document.getElementById("askMeal").selectedOptions[0].text} on ${when}` : "", typed].filter(Boolean).join(" · ");
+      try {
+        await api.post("/api/redemption/request", { person_id: S.meId, reward_id: +b.dataset.id, note,
+          ...(day ? { swap_week_id: +day.split(":")[0], swap_dow: +day.split(":")[1], swap_meal_id: +document.getElementById("askMeal").value } : {}) });
+      } catch (ex) { return toast(ex.message, "bad"); }
+      closeModal(); toast("Sent! A parent will answer soon.", "good"); viewRewards();
+    });
+  }));
   document.querySelectorAll(".approveBtn").forEach((b) => (b.onclick = busy(b, async () => {
     const budget = document.querySelector(`.approveBudget[data-id="${b.dataset.id}"]`).value;
     const res = await api.post("/api/redemption/resolve", {
