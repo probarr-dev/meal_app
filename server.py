@@ -1462,7 +1462,7 @@ def cycle(conn, today=None):
       thisWeekId      the calendar week containing today (the week being eaten)
       nextWeekId      the one after
       voteWeekId      what Vote/Finalise act on: this week while its meals are still
-                      unplanned or its shop isn't done, then the first unplanned week after
+                      unplanned or its shop isn't done, then next week
       shopWeekId      the next shop not yet done (this week's, then next's, then the
                       following one): where Extras are added
       shopViewWeekId  what Shopping opens on: shopWeekId, never past next week, so a
@@ -1477,13 +1477,10 @@ def cycle(conn, today=None):
     this_id = ensure_week(conn, week_start_of(conn, today or date.today()))
     next_id = after(this_id)
     t = row(this_id)
-    vote_id = this_id
-    if t["confirmed"] and t["shop_closed"]:
-        vote_id = next_id
-        for _ in range(52):
-            if not row(vote_id)["confirmed"]:
-                break
-            vote_id = after(vote_id)
+    # Next week's vote opens once this week is planned and shopped. It stays on next week even
+    # after next week is decided (the page then says so and offers "Reopen voting"): moving on
+    # to the week after would hide a finalise that landed on the wrong week.
+    vote_id = next_id if (t["confirmed"] and t["shop_closed"]) else this_id
     shop_id = this_id
     for _ in range(52):
         if not row(shop_id)["shop_closed"]:
@@ -1503,7 +1500,7 @@ def notify_extra_ask(conn, person_id, item, request_id):
                     extra={"tag": f"extra_request-{request_id}", "requestId": request_id})
 
 
-READ_ONLY_POSTS = {"/api/receipt/summary", "/api/receipt/parse", "/api/compare/list"}
+READ_ONLY_POSTS = {"/api/receipt/summary", "/api/receipt/parse", "/api/compare/list", "/api/week/ensure"}
 
 # Never sent to the browser or put in an export.
 SECRET_PERSON_FIELDS = ("pw_hash", "failed_logins", "locked_until", "pin_hash", "pin_default", "link_token")
@@ -2571,6 +2568,18 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("UPDATE meal SET deleted_at=datetime('now') WHERE id=?", (b["id"],))
             conn.commit()
             return self.send_json({"ok": True})
+
+        if path == "/api/week/ensure":
+            # Browsing ahead on Plan: make the week that starts on this date if it doesn't exist yet.
+            try:
+                want = date.fromisoformat(b["start_date"])
+            except (KeyError, ValueError):
+                return self.send_json({"error": "Needs a date."}, 400)
+            start = week_start_of(conn, want)
+            if date.fromisoformat(start) > date.fromisoformat(week_start_of(conn, date.today())) + timedelta(weeks=8):
+                return self.send_json({"error": "That's too far ahead."}, 400)
+            wid = ensure_week(conn, start)
+            return self.send_json({"week": dict(conn.execute("SELECT * FROM week WHERE id=?", (wid,)).fetchone())})
 
         if path == "/api/meal/bored":
             # Anyone, for themselves: tap again to take it back. Not a veto, only a badge.

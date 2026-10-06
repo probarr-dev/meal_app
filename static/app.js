@@ -456,18 +456,32 @@ const fmtWeekRange = (startISO) => {
 // step pages, so it gets its own centred line at a readable size rather than
 // a small grey aside next to the title (or, on Shopping, buried in prose).
 // Date in the page title doubles as the This/Next week switch.
+const MAX_WEEKS_AHEAD = 4;
+const weekOffset = (startISO) => {
+  const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date;
+  return thisStart ? Math.round((new Date(startISO) - new Date(thisStart)) / (7 * 86400000)) : 0;
+};
 const weekNavHTML = (startISO) => {
   if (!startISO) return "";
-  const onNext = S.weekId === S.nextWeekId;
+  const n = weekOffset(startISO);
   return `<span class="week-range week-date week-nav">
-    <button class="weekNavBtn" data-to="this" ${onNext ? "" : "disabled"} aria-label="This week">‹</button>
+    <button class="weekNavBtn" data-dir="-1" ${n <= 0 ? "disabled" : ""} aria-label="Earlier week">‹</button>
     ${esc(fmtWeekRange(startISO))}
-    <button class="weekNavBtn" data-to="next" ${onNext ? "disabled" : ""} aria-label="Next week">›</button></span>`;
+    <button class="weekNavBtn" data-dir="1" ${n >= MAX_WEEKS_AHEAD ? "disabled" : ""} aria-label="Later week">›</button></span>`;
 };
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   const b = e.target.closest(".weekNavBtn");
   if (!b || b.disabled) return;
-  S.weekId = b.dataset.to === "next" ? S.nextWeekId : S.thisWeekId;
+  const cur = (S.weeks.find((w) => w.id === S.weekId) || {}).start_date;
+  if (!cur) return;
+  const d = new Date(cur + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 7 * +b.dataset.dir);
+  const start = d.toISOString().slice(0, 10);
+  let wk = S.weeks.find((w) => w.start_date === start);
+  if (!wk) {  // a week that hasn't been touched yet: have the server make it
+    try { wk = (await api.post("/api/week/ensure", { start_date: start })).week; S.weeks.push(wk); }
+    catch (ex) { return toast(ex.message, "bad"); }
+  }
+  S.weekId = wk.id;
   route();
 });
 const meBadge = () => me() ? `<span class="me-badge" title="Signed in as ${esc(me().name)}">${me().emoji ? esc(me().emoji) : esc(me().name[0])}</span>` : "";
@@ -706,6 +720,8 @@ function route() {
     else if (S.lastTab === "shopping" && S.weekBeforeShop) { S.weekId = S.weekBeforeShop; S.weekBeforeShop = null; }
     S.lastTab = tab;
     S.showIdeas = false;
+    if (tab === "plan" && !S.keepWeek) S.weekId = S.thisWeekId;  // Plan always opens on this week
+    S.keepWeek = false;
     document.querySelectorAll("#weekToggle button").forEach((b) =>
       b.classList.toggle("on", (b.dataset.which === "this" ? S.thisWeekId : S.nextWeekId) === S.weekId));
   }
@@ -2312,7 +2328,8 @@ async function viewVote() {
   document.getElementById("view").innerHTML = `
     <header class="block-head">
       <h1>Vote ${meBadge()}</h1>
-      <span class="week-range week-date">Voting for ${weekWords(voteWeekId)} · ${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
+      <span class="week-range week-date">${esc(fmtWeekRange((S.weeks.find((w) => w.id === voteWeekId) || {}).start_date || ""))}</span></header>
+    <p class="subtitle vote-for">Voting for <strong>${weekWords(voteWeekId)}</strong></p>
     ${cycleStripHTML(!S.votingOpen && voteWeekId === S.thisWeekId && !(S.weeks.find((w) => w.id === S.thisWeekId) || {}).shop_closed ? "shop" : "vote")}
     ${parent && S.votingOpen && picks.some((x) => x.id !== S.meId && x.used < target) ? `<div class="remind-row">
       <span class="hint">Still to vote · tap to remind</span>
@@ -2564,7 +2581,7 @@ function wireFinalizePanel(voteWeekId) {
     // showing. Without this you finalise next week's meals, get dropped on
     // THIS week's plan, and the shortlist you just picked is nowhere to be
     // seen — the pool is fetched per-week and would come back empty.
-    S.weekId = voteWeekId;
+    S.weekId = voteWeekId; S.keepWeek = true;
     location.hash = "#/plan";
   });
 }

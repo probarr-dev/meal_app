@@ -52,12 +52,12 @@ class Timeline(unittest.TestCase):
         c = server.cycle(self.c, sat + timedelta(days=6))
         self.assertEqual(self.start(c["shopWeekId"]), "2026-10-10")
         self.assertEqual(c["shopViewWeekId"], c["nextWeekId"])
-        self.assertEqual(self.start(c["voteWeekId"]), "2026-10-10")
+        self.assertEqual(c["voteWeekId"], c["nextWeekId"])  # stays on next week even once decided
         # Saturday rollover: the old next week is now this week
         c = server.cycle(self.c, date(2026, 10, 3))
         self.assertEqual(self.start(c["thisWeekId"]), "2026-10-03")
         self.assertEqual(self.start(c["shopWeekId"]), "2026-10-10")
-        self.assertEqual(self.start(c["voteWeekId"]), "2026-10-10")
+        self.assertEqual(c["voteWeekId"], c["nextWeekId"])  # this week is planned and shopped, so the vote is for next week
         self.assertEqual(self.start(c["shopViewWeekId"]), "2026-10-10")
 
     def test_forgotten_shop_does_not_strand_the_cycle(self):
