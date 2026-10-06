@@ -1575,3 +1575,9 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 .week-date.week-nav { padding:0 4px; }
 .week-date .info-btn { min-width:32px; min-height:44px; font-size:1.1rem; }
 @media (max-width:560px) { .block-head .week-range.week-date { font-size:1rem; } }
+
+/* Notepad theme: meal cards written on ruled paper, a faint line under each part of the entry. */
+:root[data-notepad="1"] .meal-card h3 { padding-bottom:5px; border-bottom:1px solid var(--pad-rule); }
+:root[data-notepad="1"] .meal-card .meal-pills { margin:0; padding:7px 0 7px; border-bottom:1px solid var(--pad-rule); }
+:root[data-notepad="1"] .meal-card .ing-preview { margin:0; padding:6px 0 6px; border-bottom:1px solid var(--pad-rule); }
+:root[data-notepad="1"] .meal-card .meal-foot { margin-top:0; padding-top:6px; }
