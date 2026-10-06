@@ -250,6 +250,9 @@ def migrate(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS reward (
         id INTEGER PRIMARY KEY, name TEXT NOT NULL, points_cost INTEGER NOT NULL,
         suggested_budget_gbp REAL, active INTEGER DEFAULT 1)""")
+    # Least days between one child having this reward again (0 = no limit).
+    if "limit_days" not in [r["name"] for r in conn.execute("PRAGMA table_info(reward)")]:
+        conn.execute("ALTER TABLE reward ADD COLUMN limit_days INTEGER DEFAULT 0")
     conn.execute("""CREATE TABLE IF NOT EXISTS points_ledger (
         id INTEGER PRIMARY KEY, person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
         week_id INTEGER, dow INTEGER, slot TEXT, delta INTEGER NOT NULL,
@@ -1175,6 +1178,26 @@ def receipt_list_items(conn, week_id):
 def log_extra(conn, person_id, item, week_id, action):
     conn.execute("INSERT INTO extra_log(person_id,item,week_id,action) VALUES (?,?,?,?)",
                  (person_id or None, item, week_id, action))
+
+
+def reward_next_available(conn, person_id, reward):
+    """ISO date this child can next have this reward, or None if they can have it now."""
+    days = reward["limit_days"] or 0
+    if days <= 0:
+        return None
+    r = conn.execute("""SELECT date(resolved_at, ?) d, date(resolved_at) last FROM redemption
+                        WHERE person_id=? AND reward_id=? AND status='approved'
+                        AND resolved_at >= datetime('now', ?) ORDER BY resolved_at DESC LIMIT 1""",
+                     (f"+{days} days", person_id, reward["id"], f"-{days} days")).fetchone()
+    return r["d"] if r else None
+
+
+def points_pace(conn, person_id):
+    """Healthy-vote points per week over roughly the last 8 weeks (what a child can plan on)."""
+    r = conn.execute("""SELECT COUNT(*) c FROM points_ledger l JOIN week w ON w.id=l.week_id
+                        WHERE l.person_id=? AND l.delta>0 AND w.start_date >= date('now','-56 days')
+                        AND w.start_date <= date('now','+14 days')""", (person_id,)).fetchone()
+    return round(r["c"] / 8, 1)
 
 
 def points_mode(conn):
@@ -2181,6 +2204,9 @@ class Handler(SimpleHTTPRequestHandler):
             earned = {r["person_id"]: r["e"] for r in rows(conn.execute(
                 "SELECT person_id, SUM(delta) e FROM points_ledger WHERE delta>0 GROUP BY person_id"))}
             catalog = rows(conn.execute("SELECT * FROM reward WHERE active=1 ORDER BY points_cost"))
+            for r_ in catalog:
+                r_["nextAvailable"] = reward_next_available(conn, int(person), r_) if person else None
+            pace = points_pace(conn, int(person)) if person else 0
             requests = rows(conn.execute("""
                 SELECT rd.*, p.name AS person_name, r.name AS reward_name, r.points_cost
                 FROM redemption rd JOIN person p ON p.id=rd.person_id JOIN reward r ON r.id=rd.reward_id
@@ -2195,6 +2221,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "myEarned": earned.get(int(person), 0) if person else 0,
                 "healthyTags": [t for t in healthy_tags.split(",") if t],
                 "pointsMode": points_mode(conn),
+                "pace": pace,
             })
 
         if path == "/api/history":
@@ -2433,6 +2460,9 @@ class Handler(SimpleHTTPRequestHandler):
                          (b["week_id"], b["person_id"], b["meal_id"]))
             conn.commit()
             return self.send_json({"ok": True, "vetoed": True})
+
+        if path == "/api/week/finalize" and b.get("week_id") not in (None, cycle(conn)["thisWeekId"], cycle(conn)["nextWeekId"]):
+            return self.send_json({"error": "That week is too far ahead to finalise yet."}, 400)
 
         if path == "/api/week/finalize":
             # A parent ticks which polled meals make this week's shortlist.
@@ -3257,6 +3287,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Not a real reward."}, 400)
             if bal < reward["points_cost"]:
                 return self.send_json({"error": f"Needs {reward['points_cost']} points, only has {bal}."}, 400)
+            nxt = reward_next_available(conn, b["person_id"], reward)
+            if nxt:
+                return self.send_json({"error": f"That one is limited to every {reward['limit_days']} days. "
+                                                f"The next can be from {date.fromisoformat(nxt).strftime('%-d %b')}."}, 400)
             conn.execute("""INSERT INTO redemption(person_id,reward_id,status,budget_gbp,note,resolved_at,resolved_by)
                             VALUES (?,?,'approved',?,?,datetime('now'),?)""",
                          (b["person_id"], b["reward_id"], b.get("budget_gbp"), b.get("note", ""), b["actor_id"]))
@@ -3313,14 +3347,15 @@ class Handler(SimpleHTTPRequestHandler):
             if not is_admin(conn, b.get("admin_id")):
                 return self.send_json({"error": "Admins only."}, 403)
             if b.get("id"):
-                conn.execute("""UPDATE reward SET name=?, points_cost=?, suggested_budget_gbp=?, active=?
+                conn.execute("""UPDATE reward SET name=?, points_cost=?, suggested_budget_gbp=?, active=?, limit_days=?
                                 WHERE id=?""",
                              (b["name"], int(b["points_cost"]), b.get("suggested_budget_gbp"),
-                              int(b.get("active", 1)), b["id"]))
+                              int(b.get("active", 1)), max(0, int(b.get("limit_days") or 0)), b["id"]))
             else:
-                conn.execute("""INSERT INTO reward(name,points_cost,suggested_budget_gbp)
-                                VALUES (?,?,?)""",
-                             (b["name"], int(b["points_cost"]), b.get("suggested_budget_gbp")))
+                conn.execute("""INSERT INTO reward(name,points_cost,suggested_budget_gbp,limit_days)
+                                VALUES (?,?,?,?)""",
+                             (b["name"], int(b["points_cost"]), b.get("suggested_budget_gbp"),
+                              max(0, int(b.get("limit_days") or 0))))
             conn.commit()
             return self.send_json({"ok": True})
 

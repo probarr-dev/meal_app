@@ -2554,6 +2554,10 @@ function wireFinalizePanel(voteWeekId) {
     const meal_ids = [...document.querySelectorAll(".finalizeCb:checked")].map((c) => +c.dataset.id);
     const meals_target = +document.getElementById("mealsTargetInput").value || undefined;
     const wk = S.weeks.find((w) => w.id === voteWeekId);
+    const target = meals_target || (wk && wk.meals_target) || S.mealsTargetDefault || 7;
+    if (meal_ids.length < target && !(await confirmDialog(
+        `You've only ticked ${meal_ids.length} of the ${target} meals this week needs. Finalising closes voting for ${weekWords(voteWeekId)} (${fmtWeekRange(wk ? wk.start_date : "")}). Carry on anyway?`,
+        { okLabel: "Finalise anyway" }))) return;
     if (!(await confirmDialog(
         `Lock in ${meal_ids.length} meal${meal_ids.length === 1 ? "" : "s"} for ${weekWords(voteWeekId)} (${fmtWeekRange(wk ? wk.start_date : "")})?`,
         { title: "Which week is this for?", okLabel: "Lock it in" }))) return;
@@ -3029,7 +3033,7 @@ async function viewSettings() {
 /* ---------------------------------------------------------------- rewards */
 
 async function viewRewards() {
-  const { balances, catalog, requests, myBalance, healthyTags, pointsMode = "all", earned = {}, myEarned = 0, history = [] } =
+  const { balances, catalog, requests, myBalance, healthyTags, pointsMode = "all", pace = 0, earned = {}, myEarned = 0, history = [] } =
     await api.get(`/api/rewards?person=${S.meId || ""}`);
   const parent = isParent();
   const nameOf = (id) => S.people.find((p) => p.id === id)?.name || "?";
@@ -3047,14 +3051,25 @@ async function viewRewards() {
     </div>
 
     <h2 class="sec-title">Redeem</h2>
+    ${!parent && pace ? `<p class="subtitle">You're earning about <strong>${pace}</strong> point${pace === 1 ? "" : "s"} a week from healthy votes.</p>` : ""}
     <div class="reward-grid">
-      ${catalog.map((r) => `
-        <div class="reward-card ${myBalance >= r.points_cost ? "" : "locked"}">
+      ${catalog.map((r) => {
+        const waiting = r.nextAvailable ? `Next one from ${new Date(r.nextAvailable + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "";
+        const enough = myBalance >= r.points_cost;
+        const need = r.points_cost - myBalance;
+        const limit = r.limit_days ? `Limit: one every ${r.limit_days === 30 ? "month" : r.limit_days + " days"}` : "";
+        const guide = waiting ? waiting
+          : enough ? "Enough points — ask a parent!"
+          : `Need ${need} more${pace ? ` · about ${Math.max(1, Math.ceil(need / pace))} week${Math.ceil(need / pace) === 1 ? "" : "s"} at your pace` : ""}`;
+        return `
+        <div class="reward-card ${enough && !waiting ? "" : "locked"}">
           <div class="reward-name">${esc(r.name)}</div>
           <div class="reward-cost">${r.points_cost} pts</div>
           ${r.suggested_budget_gbp ? `<div class="hint">up to ~£${r.suggested_budget_gbp} suggested</div>` : ""}
-          ${parent ? "" : `<div class="hint">${myBalance >= r.points_cost ? "Enough points — ask a parent!" : `Need ${r.points_cost - myBalance} more`}</div>`}
-        </div>`).join("")}
+          <div class="hint">${Math.ceil(r.points_cost / 3)} weeks of voting for 3 healthy meals a week</div>
+          ${limit ? `<div class="hint"><strong>${limit}</strong></div>` : ""}
+          ${parent ? "" : `<div class="hint reward-guide">${guide}</div>`}
+        </div>`; }).join("")}
     </div>
 
     ${pending.length ? `
@@ -3127,6 +3142,7 @@ async function viewRewards() {
           <input class="rw-name" value="${esc(r.name)}" style="flex:2">
           <input class="rw-cost" type="number" value="${r.points_cost}" placeholder="points" style="max-width:80px">
           <input class="rw-budget" type="number" value="${r.suggested_budget_gbp ?? ""}" placeholder="£ suggested" style="max-width:100px">
+          <input class="rw-limit" type="number" min="0" value="${r.limit_days || ""}" placeholder="days between" title="Least days between this reward for one child (blank = no limit)" style="max-width:90px">
           <button class="rw-save primary">Save</button>
         </div>`).join("")}
       <div class="grid-row" id="rw-new">
@@ -3224,6 +3240,7 @@ async function viewRewards() {
       name: row.querySelector(".rw-name").value.trim(),
       points_cost: +row.querySelector(".rw-cost").value,
       suggested_budget_gbp: row.querySelector(".rw-budget").value || null,
+      limit_days: +row.querySelector(".rw-limit").value || 0,
     });
     viewRewards();
   })));
