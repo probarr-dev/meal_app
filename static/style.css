@@ -1097,7 +1097,7 @@ body:has(.plan-done-btn) .vote-fab { display:none; }
 .pantry-intro { font-size:.95rem; border-left:4px solid var(--good); }
 .regulars-link:hover, .extras-cta:hover { filter:brightness(1.08); }
 .regulars-link strong { color:#fff; }
-.tabs a[data-tab="shopping"] { position:relative; }
+.tabs a[data-tab="extras"], .tabs a[data-tab="rewards"] { position:relative; }
 .tabs a[data-badge]:not([data-badge=""])::after {
   content:attr(data-badge); position:absolute; top:0; right:4px;
   background:var(--bad); color:#fff; font-size:.62rem; font-weight:700;

@@ -3353,8 +3353,8 @@ let liveV = null, liveBuild = null;
 setInterval(async () => {
   if (document.hidden) return;
   let v;
-  let pending = 0, build;
-  try { ({ v, pending, build } = await api.get("/api/version")); } catch { return; }
+  let pending = 0, pendingRewards = 0, build;
+  try { ({ v, pending, pendingRewards, build } = await api.get("/api/version")); } catch { return; }
   if (pendingTicks().length) await flushTicks();
   // New code deployed while this page sat open: reload so nobody keeps
   // running (and acting on) an old version of the app.
@@ -3363,8 +3363,13 @@ setInterval(async () => {
     if (!(el && /INPUT|TEXTAREA|SELECT/.test(el.tagName))) return location.reload();
   }
   liveBuild = liveBuild || build;
-  const shopTab = document.querySelector('.tabs a[data-tab="shopping"]');
-  if (shopTab) shopTab.dataset.badge = typeof S !== "undefined" && isParent() && pending ? pending : "";
+  // The red number sits on the tab where the request is answered: extras on Extras, rewards on Rewards.
+  for (const [tab, n] of [["extras", pending], ["rewards", pendingRewards]]) {
+    const el = document.querySelector(`.tabs a[data-tab="${tab}"]`);
+    if (el) el.dataset.badge = typeof S !== "undefined" && isParent() && n ? n : "";
+  }
+  const oldBadge = document.querySelector('.tabs a[data-tab="shopping"]');
+  if (oldBadge) oldBadge.dataset.badge = "";
   if (liveV !== null && v !== liveV) {
     const el = document.activeElement;
     const busyTyping = el && /INPUT|TEXTAREA|SELECT/.test(el.tagName);

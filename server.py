@@ -1600,7 +1600,9 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 pending = conn.execute(
                     "SELECT COUNT(*) c FROM extra_request WHERE status='pending'").fetchone()["c"]
-            return self.send_json({"v": DATA_VERSION, "pending": pending, "build": BUILD_ID})
+                rewards = conn.execute(
+                    "SELECT COUNT(*) c FROM redemption WHERE status='pending'").fetchone()["c"]
+            return self.send_json({"v": DATA_VERSION, "pending": pending, "pendingRewards": rewards, "build": BUILD_ID})
         q = urllib.parse.parse_qs(u.query)
         # Who you are comes from your sign-in, never from the request. Children
         # can only ever look as themselves; parents may look at anyone.
