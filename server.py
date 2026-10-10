@@ -2324,6 +2324,28 @@ class Handler(SimpleHTTPRequestHandler):
                 "pace": pace,
             })
 
+        if path == "/api/spending":
+            if self.me["role"] != "parent":
+                return self.send_json({"error": "Parents only."}, 403)
+            receipt_tables(conn)
+            po = pick_one_keys(conn)
+            shops = []
+            for w in rows(conn.execute("""SELECT id, start_date, shop_total FROM week
+                                          WHERE shop_total IS NOT NULL AND shop_total > 0 ORDER BY start_date DESC""")):
+                r = conn.execute("SELECT id, total FROM receipt WHERE week_id=?", (w["id"],)).fetchone()
+                by, lines = {}, []
+                if r:
+                    for l in rows(conn.execute("""SELECT text, qty, amount, item_key, kind FROM receipt_line
+                                                  WHERE receipt_id=? ORDER BY amount DESC""", (r["id"],))):
+                        k = "meal" if l["item_key"] in po else ("extra" if l["kind"] == "regular" else l["kind"])
+                        by[k] = round(by.get(k, 0) + l["amount"], 2)
+                        lines.append({**l, "kind": k})
+                shops.append({"weekId": w["id"], "start": w["start_date"], "total": w["shop_total"],
+                              "hasReceipt": bool(r), "by": by, "lines": lines})
+            recent = [x["total"] for x in shops[:6]]
+            avg = round(sum(recent) / len(recent), 2) if recent else None
+            return self.send_json({"shops": shops, "average": avg, "count": len(recent)})
+
         if path == "/api/history":
             out = rows(conn.execute("SELECT * FROM week ORDER BY start_date DESC"))
             for w in out:

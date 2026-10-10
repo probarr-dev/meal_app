@@ -1597,3 +1597,17 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 .notice.pantry-intro, .notice.receipt-due { padding-right:60px; }
 .notice.receipt-due .primary { margin:0 !important; }
 .pantry-go .link-btn, .info-btn { min-width:44px; min-height:44px; font-size:1.2rem; }
+
+.spend-row { border-bottom:1px solid var(--border); }
+.spend-row:last-child { border-bottom:none; }
+.spend-row summary { display:flex; align-items:center; gap:10px; padding:10px 0; cursor:pointer; list-style:none; min-height:44px; }
+.spend-row summary::-webkit-details-marker { display:none; }
+.sp-date { flex:1; font-weight:600; }
+.sp-total { font-weight:700; font-size:1.05rem; }
+.sp-diff { font-size:.8rem; font-weight:700; min-width:64px; text-align:right; }
+.sp-diff.over { color:var(--bad); }
+.sp-diff.under { color:var(--good); }
+.sp-split { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 8px; }
+.sp-split .tag { margin-left:0; }
+.sp-lines { font-size:.85rem; padding-bottom:10px; }
+.sp-line { display:flex; justify-content:space-between; gap:12px; padding:2px 0; color:var(--muted); }

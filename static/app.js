@@ -3302,8 +3302,27 @@ async function viewHistory() {
   const thisStart = (S.weeks.find((w) => w.id === S.thisWeekId) || {}).start_date || "";
   const weeks = (await api.get("/api/history")).weeks.filter((w) => w.start_date < thisStart);
   const admin = isAdmin();
+  const spend = isParent() ? await api.get("/api/spending").catch(() => null) : null;
+  const money = (n) => `£${n.toFixed(2)}`;
+  const KIND = { meal: "🍽️ Meals", extra: "🛒 Extras", treat: "🍭 Treats", oneoff: "↩️ One-offs" };
+  const spendHTML = spend && spend.shops.length ? `
+    <h2 class="sec-title">Spending</h2>
+    <p class="subtitle">Average shop <strong>${money(spend.average)}</strong> over the last ${spend.count} shop${spend.count === 1 ? "" : "s"}.</p>
+    <div class="card pad spend-list">${spend.shops.map((x) => {
+      const diff = spend.average != null ? x.total - spend.average : null;
+      return `<details class="spend-row"><summary>
+          <span class="sp-date">${esc(fmtWeekRange(x.start))}</span>
+          <span class="sp-total">${money(x.total)}</span>
+          ${diff != null ? `<span class="sp-diff ${diff > 0.005 ? "over" : "under"}">${diff > 0.005 ? "+" : diff < -0.005 ? "−" : "±"}${money(Math.abs(diff))}</span>` : ""}
+        </summary>
+        ${x.hasReceipt ? `<div class="sp-split">${Object.keys(KIND).filter((k) => x.by[k]).map((k) => `<span class="tag">${KIND[k]} ${money(x.by[k])}</span>`).join(" ")}</div>
+          <div class="sp-lines">${x.lines.map((l) => `<div class="sp-line"><span>${l.qty > 1 ? l.qty + " × " : ""}${esc(l.text)}</span><span>${money(l.amount)}</span></div>`).join("")}</div>`
+          : `<p class="hint">No receipt scanned for this shop.</p>`}
+      </details>`; }).join("")}</div>` : "";
   document.getElementById("view").innerHTML = `
     <header class="block-head"><h1>Past Weeks</h1></header>
+    ${spendHTML}
+    <h2 class="sec-title">Meals</h2>
     <p class="subtitle">Reuse any week as a starting point.</p>
     ${weeks.map((w) => `
       <div class="card hist">
