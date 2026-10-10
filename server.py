@@ -2398,11 +2398,16 @@ class Handler(SimpleHTTPRequestHandler):
                     add_estimate(conn, groups)
                     list_keys = {i["key"] for g in groups for i in g["items"]}
                     bought = {l["item_key"] for l in lines if l.get("item_key")}
+                    unplanned = []
                     for l in lines:  # a line that was never linked, but is clearly a list item
                         if not l.get("item_key"):
                             hit = fuzzy_list_match(l["text"], list_keys, loose=True)
                             if hit:
                                 bought.add(hit)
+                            else:  # nothing on the plan it could be: an impulse buy
+                                unplanned.append({"item": re.sub(r"(?<=['’])S\b", "s", re.sub(r"^[^A-Za-z0-9]+", "", l["text"]).title()),
+                                                  "qty": l["qty"], "price": l["amount"]})
+                    unplanned.sort(key=lambda x: -x["price"])
                     saved = {"cupboard": [], "ingredients": [], "extras": []}
                     for g in groups:
                         for i in g["items"]:
@@ -2415,6 +2420,7 @@ class Handler(SimpleHTTPRequestHandler):
                                 saved["extras" if only_extra else "ingredients"].append(row)
                     for k in saved:
                         saved[k].sort(key=lambda x: -(x["price"] or 0))
+                    saved["unplanned"] = unplanned
                 shops.append({"weekId": w["id"], "start": w["start_date"], "total": w["shop_total"],
                               "hasReceipt": bool(r), "by": by, "lines": lines, "saved": saved})
             recent = [x["total"] for x in shops[:6]]

@@ -3328,10 +3328,14 @@ async function viewHistory() {
           const G = [["cupboard", "🧺 Already had (cupboard check)"], ["ingredients", "📦 Ingredients not on the receipt"], ["extras", "🛒 Extras not on the receipt"]];
           const sum = (k) => x.saved[k].reduce((t, i) => t + (i.price || 0), 0);
           const all = G.reduce((t, [k]) => t + sum(k), 0);
+          const imp = x.saved.unplanned || [];
+          const impTotal = imp.reduce((t, i) => t + i.price, 0);
           return `<div class="sp-saved"><div class="sp-saved-head">Not spent: about <strong>${money(all)}</strong></div>
             ${G.filter(([k]) => x.saved[k].length).map(([k, label]) => `<details class="sp-group"><summary>${label} · ${money(sum(k))} <span class="hint" style="display:inline">(${x.saved[k].length})</span></summary>
               ${x.saved[k].map((i) => `<div class="sp-line"><span>${esc(i.item)}</span><span>${i.price != null ? money(i.price) : "—"}</span></div>`).join("")}</details>`).join("")}
-            <p class="hint">Prices are estimates from Aldi's pricing. "Not on the receipt" includes anything that was out of stock, and anything bought but not matched to the list.</p></div>`; })() : ""}
+            <p class="hint">Prices are estimates from Aldi's pricing. "Not on the receipt" includes anything that was out of stock, and anything bought but not matched to the list.</p></div>
+            ${imp.length ? `<div class="sp-impulse"><div class="sp-saved-head">🛍️ Not planned: <strong>${money(impTotal)}</strong> <span class="hint" style="display:inline">(${imp.length} item${imp.length === 1 ? "" : "s"} on the receipt that weren't on the list)</span></div>
+              ${imp.map((i) => `<div class="sp-line"><span>${i.qty > 1 ? i.qty + " × " : ""}${esc(i.item)}</span><span>${money(i.price)}</span></div>`).join("")}</div>` : ""}`; })() : ""}
         ${x.hasReceipt ? `<div class="sp-split">${Object.keys(KIND).filter((k) => x.by[k]).map((k) => `<span class="tag">${KIND[k]} ${money(x.by[k])}</span>`).join(" ")}</div>
           <div class="sp-lines">${x.lines.map((l) => `<div class="sp-line"><span>${l.qty > 1 ? l.qty + " × " : ""}${esc(l.text)}</span><span>${money(l.amount)}</span></div>`).join("")}</div>`
           : `<p class="hint">No receipt scanned for this shop.</p>`}

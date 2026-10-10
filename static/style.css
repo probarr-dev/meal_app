@@ -1623,3 +1623,6 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 .sp-big { font-size:1.15rem; font-weight:700; margin-bottom:2px; }
 .sp-diff { line-height:1.15; }
 .sp-diff-word { font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+
+.sp-impulse { margin:4px 0 10px; padding:8px 10px; border-radius:10px; background:color-mix(in srgb, var(--low, #b27a12) 14%, transparent); }
+.sp-impulse .sp-line { padding-left:12px; }
