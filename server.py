@@ -1071,6 +1071,61 @@ def parse_receipt_columns(text, total=None):
     return lines, total
 
 
+# A price with its VAT letter, which OCR sometimes turns into junk ("0.99 ęŘŚł") or a colon ("1:29 B").
+STREAM_PRICE = re.compile(r"(?<![\d.,:])(\d{1,3})[.,:](\d{2})(?!\d)\s*(?:[AB฿]|[^\x00-\x7F]{1,4})")
+STREAM_CODE = re.compile(r"^(\d{4,8})[^\d\s]{0,4}(?:\s+(.*))?$")
+STREAM_QTY = re.compile(r"^(\d+)\s*[xX]$")
+
+
+def parse_receipt_stream(text, total=None):
+    """The last resort for a messy Live Text paste: product lines and prices come in any mix of
+    "code name / price" pairs and long product-then-price blocks. Products wait in a queue and each
+    price goes to the oldest one still without a price. OCR junk after a code or price is tolerated.
+    A bare "3 x" (then its unit price) belongs to the product that follows; bare numbers are skipped."""
+    products, pending_qty = [], None
+
+    def give(price):
+        nxt = next((x for x in products if x["amount"] is None), None)
+        if nxt:
+            nxt["amount"] = float(price)
+
+    for raw in (text or "").splitlines():
+        t = raw.strip()
+        if not t:
+            continue
+        low = re.sub(r"\s+", "", t).lower()
+        if low.startswith(("subtotal", "total", "cardnumber", "balance")):
+            break
+        q = STREAM_QTY.match(t)
+        if q:
+            pending_qty = int(q.group(1)); continue
+        m = STREAM_CODE.match(t)
+        if m and not STREAM_PRICE.fullmatch(t):
+            rest = (m.group(2) or "").strip()
+            name = STREAM_PRICE.sub("", rest).strip()
+            products.append({"code": m.group(1), "text": name, "amount": None, "qty": pending_qty or 1})
+            pending_qty = None
+            for a, b in STREAM_PRICE.findall(rest):
+                give(f"{a}.{b}")
+            continue
+        found = STREAM_PRICE.findall(t)
+        if found and not re.search(r"[A-Za-z]{3}", STREAM_PRICE.sub("", t)):
+            for a, b in found:
+                give(f"{a}.{b}")
+            continue
+        if re.fullmatch(r"\d+[.,]\d{2}", t):
+            continue  # an unlettered number: a multi-buy's unit price or the grand total
+        if re.search(r"[A-Za-z]{2}", t) and products:  # a name, or the rest of one
+            empty = next((x for x in products if not x["text"]), None)
+            if empty is not None:
+                empty["text"] = t
+            elif products[-1]["amount"] is None:  # "TUNA" / "IN BRINE 145G": the rest of the last name
+                products[-1]["text"] = (products[-1]["text"] + " " + t).strip()
+    lines = [{"code": p["code"], "text": p["text"] or p["code"], "qty": p["qty"], "amount": p["amount"]}
+             for p in products if p["amount"] is not None]
+    return lines, total
+
+
 def parse_receipt(text):
     """Aldi UK receipt text (e.g. pasted from iPhone Live Text) -> lines + totals."""
     lines, pending_qty, total, count = [], None, None, None
@@ -1104,7 +1159,24 @@ def parse_receipt(text):
             lines[-1]["amount"] = round(lines[-1]["amount"] + float(m.group(1)), 2)
             lines[-1]["discount"] = True
     if not lines:
-        lines, total = parse_receipt_columns(text, total)
+        # Two layouts Live Text produces. A reading is trusted when its lines add up to a
+        # bare number printed on the receipt (the total); otherwise the other is tried.
+        def bare_total(ls):
+            s_ = round(sum(l["amount"] for l in ls), 2)
+            for m in re.finditer(r"(?<![\d.])(\d+\.\d{2})(?![\d])", (text or "").split("ubtotal")[-1]):
+                if abs(float(m.group(1)) - s_) < 0.005:
+                    return float(m.group(1))
+            return None
+        cols, ctotal = parse_receipt_columns(text, total)
+        strm, _ = parse_receipt_stream(text, total)
+        ctotal = ctotal if ctotal is not None else (bare_total(cols) if cols else None)
+        stotal = bare_total(strm) if strm else None
+        if cols and ctotal is not None:
+            lines, total = cols, ctotal
+        elif strm and stotal is not None:
+            lines, total = strm, stotal
+        else:
+            lines, total = (cols, total) if cols else (strm, total)
     # identical consecutive lines are the same product bought twice: merge
     merged = []
     for ln in lines:
