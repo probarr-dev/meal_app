@@ -2907,8 +2907,16 @@ class Handler(SimpleHTTPRequestHandler):
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Parents only."}, 403)
             lines, total, count = parse_receipt(b.get("text", ""))
+            # Keep the pasted text of the last few attempts, so a receipt that won't read can be looked at.
+            conn.execute("""CREATE TABLE IF NOT EXISTS receipt_debug (
+                id INTEGER PRIMARY KEY, week_id INTEGER, text TEXT, lines_found INTEGER, total REAL,
+                created_at TEXT DEFAULT (datetime('now')))""")
+            conn.execute("INSERT INTO receipt_debug(week_id,text,lines_found,total) VALUES (?,?,?,?)",
+                         (b.get("week_id"), (b.get("text") or "")[:20000], len(lines), total))
+            conn.execute("DELETE FROM receipt_debug WHERE id NOT IN (SELECT id FROM receipt_debug ORDER BY id DESC LIMIT 20)")
+            conn.commit()
             if not lines:
-                return self.send_json({"error": "Couldn't find any item lines. Paste the text straight from the receipt."}, 400)
+                return self.send_json({"error": "Couldn't find any item lines. A copy has been kept so it can be looked at."}, 400)
             lines = classify_receipt(conn, b["week_id"], lines)
             s_ = round(sum(l["amount"] for l in lines), 2)
             n_ = sum(l["qty"] for l in lines if not l.get("deposit"))
