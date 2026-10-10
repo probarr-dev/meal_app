@@ -3303,49 +3303,61 @@ async function viewHistory() {
   const weeks = (await api.get("/api/history")).weeks.filter((w) => w.start_date < thisStart);
   const admin = isAdmin();
   const spend = isParent() ? await api.get("/api/spending").catch(() => null) : null;
+  const hasSpend = !!(spend && spend.shops.length);
+  const view = hasSpend ? (S.historyView || "spending") : "weeks";
   const money = (n) => `£${n.toFixed(2)}`;
-  const KIND = { meal: "🍽️ Meals", extra: "🛒 Extras", treat: "🍭 Treats", oneoff: "↩️ One-offs" };
-  const spendHTML = spend && spend.shops.length ? `
-    <h2 class="sec-title">Spending</h2>
-    ${(() => {
-      const [a, b] = spend.shops, d = spend.average != null ? a.total - spend.average : 0;
-      const less = d < -0.005, more = d > 0.005;
-      const prev = b ? a.total - b.total : null;
-      return `<div class="sp-headline ${less ? "good" : more ? "bad" : ""}">
-        <div class="sp-big">${less ? "✅ Spending less" : more ? "⚠️ Spending more" : "➖ On the average"}</div>
-        <div>Last shop <strong>${money(a.total)}</strong>${less || more ? `, <strong>${money(Math.abs(d))} ${less ? "under" : "over"}</strong> your average of ${money(spend.average)}` : ` (your average is ${money(spend.average)})`}.</div>
-        ${prev != null && Math.abs(prev) > 0.005 ? `<div class="hint">${money(Math.abs(prev))} ${prev < 0 ? "less" : "more"} than the shop before.</div>` : ""}
-      </div>`; })()}
-    <p class="subtitle">Average shop <strong>${money(spend.average)}</strong> over the last ${spend.count} shop${spend.count === 1 ? "" : "s"}.</p>
-    <div class="card pad spend-list">${spend.shops.map((x) => {
-      const diff = spend.average != null ? x.total - spend.average : null;
-      return `<details class="spend-row"><summary>
-          <span class="sp-date">${esc(fmtWeekRange(x.start))}</span>
-          <span class="sp-total">${money(x.total)}</span>
-          ${diff != null ? `<span class="sp-diff ${diff > 0.005 ? "over" : "under"}">${diff > 0.005 ? "▲ " : diff < -0.005 ? "▼ " : ""}${money(Math.abs(diff))}<br><span class="sp-diff-word">${diff > 0.005 ? "over avg" : diff < -0.005 ? "under avg" : "on avg"}</span></span>` : ""}
-        </summary>
-        ${x.saved ? (() => {
-          const G = [["cupboard", "🧺 Already had (cupboard check)"], ["ingredients", "📦 Ingredients not on the receipt"], ["extras", "🛒 Extras not on the receipt"]];
-          const sum = (k) => x.saved[k].reduce((t, i) => t + (i.price || 0), 0);
-          const all = G.reduce((t, [k]) => t + sum(k), 0);
-          const imp = x.saved.unplanned || [];
-          const impTotal = imp.reduce((t, i) => t + i.price, 0);
-          return `<div class="sp-saved"><div class="sp-saved-head">Not spent: about <strong>${money(all)}</strong></div>
-            ${G.filter(([k]) => x.saved[k].length).map(([k, label]) => `<details class="sp-group"><summary>${label} · ${money(sum(k))} <span class="hint" style="display:inline">(${x.saved[k].length})</span></summary>
-              ${x.saved[k].map((i) => `<div class="sp-line"><span>${esc(i.item)}</span><span>${i.price != null ? money(i.price) : "—"}</span></div>`).join("")}</details>`).join("")}
-            <p class="hint">Prices are estimates from Aldi's pricing. "Not on the receipt" includes anything that was out of stock, and anything bought but not matched to the list.</p></div>
-            ${imp.length ? `<div class="sp-impulse"><div class="sp-saved-head">🛍️ Not planned: <strong>${money(impTotal)}</strong> <span class="hint" style="display:inline">(${imp.length} item${imp.length === 1 ? "" : "s"} on the receipt that weren't on the list)</span></div>
-              ${imp.map((i) => `<div class="sp-line"><span>${i.qty > 1 ? i.qty + " × " : ""}${esc(i.item)}</span><span>${money(i.price)}</span></div>`).join("")}</div>` : ""}`; })() : ""}
-        ${x.hasReceipt ? `<div class="sp-split">${Object.keys(KIND).filter((k) => x.by[k]).map((k) => `<span class="tag">${KIND[k]} ${money(x.by[k])}</span>`).join(" ")}</div>
-          <div class="sp-lines">${x.lines.map((l) => `<div class="sp-line"><span>${l.qty > 1 ? l.qty + " × " : ""}${esc(l.text)}</span><span>${money(l.amount)}</span></div>`).join("")}</div>`
-          : `<p class="hint">No receipt scanned for this shop.</p>`}
-      </details>`; }).join("")}</div>` : "";
-  document.getElementById("view").innerHTML = `
-    <header class="block-head"><h1>Past Weeks</h1></header>
-    ${spendHTML}
-    <h2 class="sec-title">Meals</h2>
-    <p class="subtitle">Reuse any week as a starting point.</p>
-    ${weeks.map((w) => `
+  const KIND = { meal: ["Meals", "var(--accent)"], extra: ["Extras", "#4f7fe8"], treat: ["Treats", "#d9a441"], oneoff: ["One-offs", "var(--muted)"] };
+  const sel = Math.min(S.spendSel || 0, hasSpend ? spend.shops.length - 1 : 0);
+
+  const spendingHTML = () => {
+    const shops = spend.shops, x = shops[sel], avg = spend.average;
+    const diff = avg != null ? x.total - avg : 0, under = diff < -0.005, over = diff > 0.005;
+    const recent = shops.slice(0, 8).slice().reverse();  // oldest -> newest
+    const top = Math.max(avg || 0, ...recent.map((s) => s.total)) * 1.12 || 1;
+    const bw = 320 / recent.length, h = 84;
+    const bars = recent.map((s, i) => {
+      const bh = Math.max(3, (s.total / top) * h), idx = shops.indexOf(s), on = idx === sel;
+      return `<g class="sp-bar" data-i="${idx}" tabindex="0" role="button" aria-label="${esc(fmtWeekRange(s.start))}: ${money(s.total)}">
+        <rect x="${i * bw + 4}" y="${h - bh}" width="${bw - 8}" height="${bh}" rx="4" fill="${on ? "var(--accent)" : "var(--border)"}"/>
+        <text x="${i * bw + bw / 2}" y="${h + 14}" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(new Date(s.start + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }))}</text></g>`;
+    }).join("");
+    const avgY = avg != null ? h - (avg / top) * h : null;
+    const chart = `<svg viewBox="0 0 320 ${h + 20}" class="sp-chart" role="img" aria-label="Spend per shop against the average">
+      ${bars}${avgY != null ? `<line x1="0" x2="320" y1="${avgY}" y2="${avgY}" stroke="var(--text)" stroke-width="1" stroke-dasharray="4 3" opacity=".55"/>
+      <text x="318" y="${Math.max(10, avgY - 4)}" text-anchor="end" font-size="9" fill="var(--text)" opacity=".75">average ${money(avg)}</text>` : ""}</svg>`;
+
+    const parts = Object.keys(KIND).filter((k) => x.by[k]);
+    const splitTotal = parts.reduce((t, k) => t + x.by[k], 0) || 1;
+    const stack = x.hasReceipt ? `<div class="sp-stack" role="img" aria-label="How the shop splits">${parts.map((k) =>
+        `<span style="width:${(x.by[k] / splitTotal) * 100}%;background:${KIND[k][1]}" title="${KIND[k][0]} ${money(x.by[k])}"></span>`).join("")}</div>
+      <div class="sp-legend">${parts.map((k) => `<span><i style="background:${KIND[k][1]}"></i>${KIND[k][0]} <b>${money(x.by[k])}</b></span>`).join("")}</div>` : `<p class="hint">No receipt scanned for this shop, so no breakdown.</p>`;
+
+    const sv = x.saved, impulse = (sv && sv.unplanned) || [];
+    const sum = (arr) => arr.reduce((t, i) => t + (i.price || 0), 0);
+    const notSpent = sv ? sum(sv.cupboard) + sum(sv.ingredients) + sum(sv.extras) : 0;
+    const group = (label, arr) => arr.length ? `<div class="sp-sub"><div class="sp-sub-head"><span>${label}</span><b>${money(sum(arr))}</b></div>
+        ${arr.map((i) => `<div class="sp-line"><span>${i.qty && i.qty !== "× 1" ? "" : ""}${esc(i.item)}</span><span>${i.price != null ? money(i.price) : "—"}</span></div>`).join("")}</div>` : "";
+    const block = (icon, title, value, inner, cls = "") => `<details class="sp-block ${cls}"><summary><span class="sp-ic" aria-hidden="true">${icon}</span><span class="sp-title">${title}</span><b>${value}</b><span class="sp-chev" aria-hidden="true">▸</span></summary><div class="sp-inner">${inner}</div></details>`;
+
+    return `
+      <div class="sp-hero ${under ? "good" : over ? "bad" : ""}">
+        <div class="sp-hero-top">
+          <div><div class="sp-when">${esc(fmtWeekRange(x.start))} shop</div><div class="sp-amount">${money(x.total)}</div></div>
+          ${avg != null ? `<div class="sp-pill ${under ? "good" : over ? "bad" : ""}">${under ? "▼" : over ? "▲" : "•"} ${money(Math.abs(diff))}<span>${under ? "under" : over ? "over" : "on"} average</span></div>` : ""}
+        </div>
+        ${chart}
+      </div>
+      <div class="sp-card">${stack}</div>
+      ${sv ? block("🧺", "Not spent", money(notSpent),
+          group("Already had (cupboard check)", sv.cupboard) + group("On the list, not on the receipt: ingredients", sv.ingredients) + group("On the list, not on the receipt: extras", sv.extras)
+          + `<p class="hint">Estimates from Aldi's prices. "Not on the receipt" can include anything out of stock or not matched to the list.</p>`, "calm") : ""}
+      ${impulse.length ? block("🛍️", "Not planned", money(sum(impulse)),
+          impulse.map((i) => `<div class="sp-line"><span>${i.qty > 1 ? i.qty + " × " : ""}${esc(i.item)}</span><span>${money(i.price)}</span></div>`).join(""), "warm") : ""}
+      ${x.hasReceipt ? block("🧾", "Every item", `${x.lines.length}`,
+          x.lines.map((l) => `<div class="sp-line"><span>${l.qty > 1 ? l.qty + " × " : ""}${esc(l.text)}</span><span>${money(l.amount)}</span></div>`).join("")) : ""}`;
+  };
+
+  const weeksHTML = () => weeks.map((w) => `
       <div class="card hist">
         <div class="hist-head">
           <h3>w/c ${esc(w.start_date)}</h3>
@@ -3362,7 +3374,20 @@ async function viewHistory() {
             return `<div class="hist-day"><span class="hist-dow">${s}</span><span>${m ? esc(m.name) : "—"}</span></div>`;
           }).join("")}
         </div>
-      </div>`).join("") || `<p class="empty">No history yet.</p>`}`;
+      </div>`).join("") || `<p class="empty">No history yet.</p>`;
+
+  document.getElementById("view").innerHTML = `
+    <header class="block-head"><h1>History</h1></header>
+    ${hasSpend ? `<div class="seg" role="tablist">
+      <button class="seg-btn ${view === "spending" ? "on" : ""}" data-v="spending" role="tab">💷 Spending</button>
+      <button class="seg-btn ${view === "weeks" ? "on" : ""}" data-v="weeks" role="tab">🗓️ Past weeks</button></div>` : ""}
+    ${view === "spending" ? spendingHTML() : `<p class="subtitle">Reuse any week as a starting point.</p>${weeksHTML()}`}`;
+
+  document.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => { S.historyView = b.dataset.v; viewHistory(); }));
+  document.querySelectorAll(".sp-bar").forEach((g) => {
+    const pick = () => { S.spendSel = +g.dataset.i; viewHistory(); };
+    g.onclick = pick; g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") pick(); };
+  });
 
   document.querySelectorAll(".reuse").forEach((b) => (b.onclick = busy(b, async () => {
     const res = await api.post("/api/week/new", { copy_from: +b.dataset.id });
