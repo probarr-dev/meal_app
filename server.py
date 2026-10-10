@@ -2860,27 +2860,34 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 # Same item typed again just bumps frequency rather than
                 # duplicating the row — that's what the maintained list sorts by.
+                new_count = 1  # quantity to put on this week's list when the extra is brand new
                 existing = conn.execute("SELECT id FROM extra WHERE item=? COLLATE NOCASE",
                                         (b["item"],)).fetchone()
                 if existing:
                     eid = existing["id"]
                     conn.execute("UPDATE extra SET use_count = use_count + 1 WHERE id=?", (eid,))
                 else:
+                    amt, unit_ = float(b.get("amount") or 1), b.get("unit", "unit")
+                    # "4 soups" is four of them (the week's quantity), not a pack of 4: keeping 4 here as
+                    # well as a quantity of 4 is how a list ended up asking for 16.
+                    count = max(1, int(round(amt))) if unit_ == "unit" and amt > 1 else 1
+                    if count > 1:
+                        amt = 1.0
                     cur = conn.execute(
                         """INSERT INTO extra(item,aisle,person_id,recurring,amount,unit,use_count)
                            VALUES (?,?,?,?,?,?,1)""",
                         (b["item"], b.get("aisle", "Household"), b.get("person_id"),
-                         int(b.get("recurring", 0)), float(b.get("amount") or 1),
-                         b.get("unit", "unit")))
+                         int(b.get("recurring", 0)), amt, unit_))
                     eid = cur.lastrowid
+                    new_count = count
             # Say whether this actually put something on the week's list. The
             # INSERT OR IGNORE quietly does nothing when the item is already
             # there, which looked identical to a working add from the client's
             # side — press it five times, get five silent no-ops.
             added_to_week = False
             if b.get("week_id") and not int(b.get("recurring", 0)):
-                cur = conn.execute("INSERT OR IGNORE INTO week_extra(week_id,extra_id) VALUES (?,?)",
-                                   (b["week_id"], eid))
+                cur = conn.execute("INSERT OR IGNORE INTO week_extra(week_id,extra_id,qty) VALUES (?,?,?)",
+                                   (b["week_id"], eid, new_count if not b.get("id") else 1))
                 added_to_week = cur.rowcount > 0
                 if added_to_week:
                     log_extra(conn, b.get("by"), b["item"], b["week_id"], "added")
@@ -2927,11 +2934,12 @@ class Handler(SimpleHTTPRequestHandler):
                     eid = existing["id"]
                     conn.execute("UPDATE extra SET use_count = use_count + 1 WHERE id=?", (eid,))
                 else:
+                    dimensionless = req["unit"] == "unit" and (req["amount"] or 1) > 1
                     cur = conn.execute(
                         """INSERT INTO extra(item,aisle,amount,unit,use_count) VALUES (?,?,?,?,1)""",
-                        (req["item"], req["aisle"], req["amount"], req["unit"]))
+                        (req["item"], req["aisle"], 1 if dimensionless else req["amount"], req["unit"]))
                     eid = cur.lastrowid
-                n = max(1, int(req["amount"] or 1)) if existing else 1
+                n = max(1, int(req["amount"] or 1)) if (existing or (req["unit"] == "unit")) else 1
                 conn.execute("""INSERT INTO week_extra(week_id,extra_id,qty) VALUES (?,?,?)
                                 ON CONFLICT(week_id,extra_id) DO UPDATE SET qty=MAX(qty, excluded.qty)""",
                              (req["week_id"], eid, n))

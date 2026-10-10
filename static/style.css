@@ -1661,3 +1661,22 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 .sp-sub { margin-top:6px; }
 .sp-sub-head { display:flex; justify-content:space-between; font-size:.82rem; font-weight:700; padding:6px 0 2px; border-bottom:1px solid var(--border); }
 .sp-line { display:flex; justify-content:space-between; gap:12px; padding:3px 0; font-size:.88rem; color:var(--muted); }
+
+/* Meals: the same card look as Spending (rounded, bordered, one clear footer), in every theme. */
+.meal-grid { display:grid; gap:12px; }
+.meal-card, :root[data-notepad="1"] .meal-card {
+  border-radius:16px; border:1px solid var(--border); background-color:var(--card); background-image:none;
+  box-shadow:0 2px 6px rgba(0,0,0,.08); padding:14px 16px !important;
+}
+.meal-card h3 { font-size:1.08rem; line-height:1.25; }
+:root[data-notepad="1"] .meal-card h3, :root[data-notepad="1"] .meal-card .meal-pills,
+:root[data-notepad="1"] .meal-card .ing-preview { border-bottom:none; padding-bottom:0; }
+.meal-card .meal-pills { margin:8px 0 6px; padding:0; }
+.meal-card .ing-preview { margin:0; padding:0; }
+.meal-card .meal-foot, :root[data-notepad="1"] .meal-card .meal-foot {
+  margin-top:12px; padding-top:10px; border-top:1px solid var(--border);
+}
+.meal-cost { background:color-mix(in srgb, var(--accent) 12%, transparent); padding:4px 10px; border-radius:999px; }
+/* "Not rated yet" is implied by empty stars; dropping it keeps price and stars on one line. */
+.meal-foot .rating-avg > .hint { display:none; }
+.meal-foot .rating-avg:has(> .hint) { display:none; }
