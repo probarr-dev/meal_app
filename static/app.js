@@ -3315,6 +3315,14 @@ async function viewHistory() {
           <span class="sp-total">${money(x.total)}</span>
           ${diff != null ? `<span class="sp-diff ${diff > 0.005 ? "over" : "under"}">${diff > 0.005 ? "+" : diff < -0.005 ? "−" : "±"}${money(Math.abs(diff))}</span>` : ""}
         </summary>
+        ${x.saved ? (() => {
+          const G = [["cupboard", "🧺 Already had (cupboard check)"], ["ingredients", "📦 Ingredients not on the receipt"], ["extras", "🛒 Extras not on the receipt"]];
+          const sum = (k) => x.saved[k].reduce((t, i) => t + (i.price || 0), 0);
+          const all = G.reduce((t, [k]) => t + sum(k), 0);
+          return `<div class="sp-saved"><div class="sp-saved-head">Not spent: about <strong>${money(all)}</strong></div>
+            ${G.filter(([k]) => x.saved[k].length).map(([k, label]) => `<details class="sp-group"><summary>${label} · ${money(sum(k))} <span class="hint" style="display:inline">(${x.saved[k].length})</span></summary>
+              ${x.saved[k].map((i) => `<div class="sp-line"><span>${esc(i.item)}</span><span>${i.price != null ? money(i.price) : "—"}</span></div>`).join("")}</details>`).join("")}
+            <p class="hint">Prices are estimates from Aldi's pricing. "Not on the receipt" includes anything that was out of stock, and anything bought but not matched to the list.</p></div>`; })() : ""}
         ${x.hasReceipt ? `<div class="sp-split">${Object.keys(KIND).filter((k) => x.by[k]).map((k) => `<span class="tag">${KIND[k]} ${money(x.by[k])}</span>`).join(" ")}</div>
           <div class="sp-lines">${x.lines.map((l) => `<div class="sp-line"><span>${l.qty > 1 ? l.qty + " × " : ""}${esc(l.text)}</span><span>${money(l.amount)}</span></div>`).join("")}</div>`
           : `<p class="hint">No receipt scanned for this shop.</p>`}

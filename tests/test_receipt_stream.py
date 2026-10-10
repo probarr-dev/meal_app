@@ -64,3 +64,22 @@ class Stream(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MergeAndRecover(unittest.TestCase):
+    def test_repeats_merge_wherever_they_sit(self):
+        lines = [{"code": "111111", "text": "A", "qty": 1, "amount": 1.0},
+                 {"code": "222222", "text": "B", "qty": 1, "amount": 2.0},
+                 {"code": "111111", "text": "A", "qty": 1, "amount": 1.0}]
+        m = server.merge_receipt_lines(lines)
+        self.assertEqual([(l["code"], l["qty"], l["amount"]) for l in m], [("111111", 2, 2.0), ("222222", 1, 2.0)])
+
+    def test_cut_off_code_is_recovered_from_the_same_receipt(self):
+        server.init_db()
+        c = server.db()
+        wid = c.execute("INSERT INTO week(start_date) VALUES ('2030-01-05')").lastrowid
+        lines = [{"code": "273659", "text": "CUCUMBER", "qty": 1, "amount": 0.99},
+                 {"code": "27365", "text": "CUCUMBER", "qty": 1, "amount": 0.99}]
+        out = server.classify_receipt(c, wid, lines)
+        self.assertEqual(len(out), 1)
+        self.assertEqual((out[0]["code"], out[0]["qty"], out[0]["amount"]), ("273659", 2, 1.98))

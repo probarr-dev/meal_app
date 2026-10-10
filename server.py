@@ -1126,6 +1126,20 @@ def parse_receipt_stream(text, total=None):
     return lines, total
 
 
+def merge_receipt_lines(lines):
+    """The same product bought twice is one line (wherever the two sit on the receipt)."""
+    merged, by_code = [], {}
+    for ln in lines:
+        prev = by_code.get(ln["code"])
+        if prev and not ln.get("deposit") and not prev.get("deposit") and not ln.get("discount") and not prev.get("discount"):
+            prev["qty"] += ln["qty"]; prev["amount"] = round(prev["amount"] + ln["amount"], 2)
+        else:
+            ln = dict(ln)
+            merged.append(ln)
+            by_code.setdefault(ln["code"], ln)
+    return merged
+
+
 def parse_receipt(text):
     """Aldi UK receipt text (e.g. pasted from iPhone Live Text) -> lines + totals."""
     lines, pending_qty, total, count = [], None, None, None
@@ -1177,14 +1191,7 @@ def parse_receipt(text):
             lines, total = strm, stotal
         else:
             lines, total = (cols, total) if cols else (strm, total)
-    # identical consecutive lines are the same product bought twice: merge
-    merged = []
-    for ln in lines:
-        if merged and merged[-1]["code"] == ln["code"] and not ln.get("deposit") and not merged[-1].get("discount"):
-            merged[-1]["qty"] += ln["qty"]; merged[-1]["amount"] = round(merged[-1]["amount"] + ln["amount"], 2)
-        else:
-            merged.append(dict(ln))
-    return merged, total, count
+    return merge_receipt_lines(lines), total, count
 
 
 def receipt_tables(conn):
@@ -1204,6 +1211,15 @@ def classify_receipt(conn, week_id, lines):
         if len(core) > 6:
             code_to_item.setdefault(core[:6], r["item_key"])  # variant codes: 387996004 -> 387996
     learned = {r["code"]: r for r in rows(conn.execute("SELECT * FROM receipt_code"))}
+    # OCR sometimes drops the last digit of a code ("27365" for "273659"). If exactly one known
+    # code (a linked product, a remembered one, or another line on this receipt) starts with it, use that.
+    known = set(code_to_item) | set(learned) | {l["code"] for l in lines if len(l["code"]) >= 6}
+    for ln in lines:
+        if 4 <= len(ln["code"]) <= 5:
+            hits = {k for k in known if len(k) == len(ln["code"]) + 1 and k.startswith(ln["code"])}
+            if len(hits) == 1:
+                ln["code"] = hits.pop(); ln["recovered"] = True
+    lines = merge_receipt_lines(lines)
     groups = build_shopping(conn, week_id)
     on_list = {i["key"]: i for g in groups for i in g["items"]}
     meal_keys = {item_key(r["item"]) for r in rows(conn.execute(
@@ -2340,8 +2356,27 @@ class Handler(SimpleHTTPRequestHandler):
                         k = "meal" if l["item_key"] in po else ("extra" if l["kind"] == "regular" else l["kind"])
                         by[k] = round(by.get(k, 0) + l["amount"], 2)
                         lines.append({**l, "kind": k})
+                saved = None
+                if r and len(shops) < 8:
+                    # What the list wanted that this shop didn't pay for: ticked off at the cupboard check,
+                    # or on the list but not on the receipt (out of stock, or just not bought).
+                    bought = {l["item_key"] for l in lines if l.get("item_key")}
+                    groups = build_shopping(conn, w["id"])
+                    add_estimate(conn, groups)
+                    saved = {"cupboard": [], "ingredients": [], "extras": []}
+                    for g in groups:
+                        for i in g["items"]:
+                            price = ((i["priceLow"] + i["priceHigh"]) / 2) if i.get("priceLow") is not None else None
+                            row = {"item": i["item"], "qty": i["qty"], "price": round(price, 2) if price is not None else None}
+                            if i["pantryChecked"]:
+                                saved["cupboard"].append(row)
+                            elif i["key"] not in bought:
+                                only_extra = i["parts"] and all(p["kind"] == "extra" for p in i["parts"])
+                                saved["extras" if only_extra else "ingredients"].append(row)
+                    for k in saved:
+                        saved[k].sort(key=lambda x: -(x["price"] or 0))
                 shops.append({"weekId": w["id"], "start": w["start_date"], "total": w["shop_total"],
-                              "hasReceipt": bool(r), "by": by, "lines": lines})
+                              "hasReceipt": bool(r), "by": by, "lines": lines, "saved": saved})
             recent = [x["total"] for x in shops[:6]]
             avg = round(sum(recent) / len(recent), 2) if recent else None
             return self.send_json({"shops": shops, "average": avg, "count": len(recent)})
