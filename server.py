@@ -2,6 +2,7 @@
 """Family meal planner. Python stdlib + SQLite only — no dependencies to rot."""
 
 import base64
+import difflib
 import hashlib
 import json
 import math
@@ -1202,6 +1203,26 @@ def receipt_tables(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS receipt_code (code TEXT PRIMARY KEY, item_key TEXT, kind TEXT, name TEXT)""")
 
 
+def fuzzy_list_match(text, keys, loose=False):
+    """Which list item does a receipt line's wording stand for ("GHERKINS" -> "Gerkins")?
+    A close spelling wins (strict); `loose` also accepts a line that contains every word of exactly
+    one item ("SOUP TOMATO 400G" -> "Soup"). Returns the key, or None if nothing is clearly right."""
+    def norm(x):
+        return " ".join(re.sub(r"s\b", "", w) for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split())
+    t = norm(text)
+    if not t:
+        return None
+    scored = sorted(((difflib.SequenceMatcher(None, t, norm(k)).ratio(), k) for k in keys if norm(k)), reverse=True)
+    if scored and scored[0][0] >= 0.84 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.08):
+        return scored[0][1]
+    if loose:
+        words = set(t.split())
+        hits = [k for k in keys if norm(k) and set(norm(k).split()) <= words]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def classify_receipt(conn, week_id, lines):
     receipt_tables(conn)
     code_to_item = {}
@@ -1229,7 +1250,20 @@ def classify_receipt(conn, week_id, lines):
         if ln.get("deposit"):
             ln["kind"] = "extra"; ln["name"] = "Bottle deposit"; continue
         key = code_to_item.get(ln["code"].lstrip("0")) or (learned.get(ln["code"]) or {}).get("item_key")
+        guessed = False
+        near = fuzzy_list_match(ln["text"], set(on_list) | meal_keys)
+        if not key:  # not a code we know: a near-identical spelling of something on the list counts
+            key = near
+            guessed = bool(key)
+        elif near and near != key and not (name_tokens(ln["text"]) & name_tokens(key)) \
+                and difflib.SequenceMatcher(None, ln["text"].lower(), key.lower()).ratio() < 0.35:
+            # What was remembered for this code looks nothing like the line, but the line's wording is
+            # almost exactly something on the list ("GHERKINS" remembered as soup): trust the wording.
+            key = near
+            guessed = True
         ln["item_key"] = key
+        if guessed:
+            ln.update({"matched": True, "decided": True, "guessed": True})
         ln["name"] = key or (learned.get(ln["code"]) or {}).get("name") or ln["text"].title()
         if key and key in meal_keys:
             ln["kind"] = "meal"
@@ -2360,9 +2394,15 @@ class Handler(SimpleHTTPRequestHandler):
                 if r and len(shops) < 8:
                     # What the list wanted that this shop didn't pay for: ticked off at the cupboard check,
                     # or on the list but not on the receipt (out of stock, or just not bought).
-                    bought = {l["item_key"] for l in lines if l.get("item_key")}
                     groups = build_shopping(conn, w["id"])
                     add_estimate(conn, groups)
+                    list_keys = {i["key"] for g in groups for i in g["items"]}
+                    bought = {l["item_key"] for l in lines if l.get("item_key")}
+                    for l in lines:  # a line that was never linked, but is clearly a list item
+                        if not l.get("item_key"):
+                            hit = fuzzy_list_match(l["text"], list_keys, loose=True)
+                            if hit:
+                                bought.add(hit)
                     saved = {"cupboard": [], "ingredients": [], "extras": []}
                     for g in groups:
                         for i in g["items"]:

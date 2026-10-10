@@ -3307,13 +3307,22 @@ async function viewHistory() {
   const KIND = { meal: "🍽️ Meals", extra: "🛒 Extras", treat: "🍭 Treats", oneoff: "↩️ One-offs" };
   const spendHTML = spend && spend.shops.length ? `
     <h2 class="sec-title">Spending</h2>
+    ${(() => {
+      const [a, b] = spend.shops, d = spend.average != null ? a.total - spend.average : 0;
+      const less = d < -0.005, more = d > 0.005;
+      const prev = b ? a.total - b.total : null;
+      return `<div class="sp-headline ${less ? "good" : more ? "bad" : ""}">
+        <div class="sp-big">${less ? "✅ Spending less" : more ? "⚠️ Spending more" : "➖ On the average"}</div>
+        <div>Last shop <strong>${money(a.total)}</strong>${less || more ? `, <strong>${money(Math.abs(d))} ${less ? "under" : "over"}</strong> your average of ${money(spend.average)}` : ` (your average is ${money(spend.average)})`}.</div>
+        ${prev != null && Math.abs(prev) > 0.005 ? `<div class="hint">${money(Math.abs(prev))} ${prev < 0 ? "less" : "more"} than the shop before.</div>` : ""}
+      </div>`; })()}
     <p class="subtitle">Average shop <strong>${money(spend.average)}</strong> over the last ${spend.count} shop${spend.count === 1 ? "" : "s"}.</p>
     <div class="card pad spend-list">${spend.shops.map((x) => {
       const diff = spend.average != null ? x.total - spend.average : null;
       return `<details class="spend-row"><summary>
           <span class="sp-date">${esc(fmtWeekRange(x.start))}</span>
           <span class="sp-total">${money(x.total)}</span>
-          ${diff != null ? `<span class="sp-diff ${diff > 0.005 ? "over" : "under"}">${diff > 0.005 ? "+" : diff < -0.005 ? "−" : "±"}${money(Math.abs(diff))}</span>` : ""}
+          ${diff != null ? `<span class="sp-diff ${diff > 0.005 ? "over" : "under"}">${diff > 0.005 ? "▲ " : diff < -0.005 ? "▼ " : ""}${money(Math.abs(diff))}<br><span class="sp-diff-word">${diff > 0.005 ? "over avg" : diff < -0.005 ? "under avg" : "on avg"}</span></span>` : ""}
         </summary>
         ${x.saved ? (() => {
           const G = [["cupboard", "🧺 Already had (cupboard check)"], ["ingredients", "📦 Ingredients not on the receipt"], ["extras", "🛒 Extras not on the receipt"]];

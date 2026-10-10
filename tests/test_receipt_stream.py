@@ -83,3 +83,12 @@ class MergeAndRecover(unittest.TestCase):
         out = server.classify_receipt(c, wid, lines)
         self.assertEqual(len(out), 1)
         self.assertEqual((out[0]["code"], out[0]["qty"], out[0]["amount"]), ("273659", 2, 1.98))
+
+
+class Fuzzy(unittest.TestCase):
+    def test_close_spelling_matches_and_unrelated_does_not(self):
+        keys = {"Gerkins", "Soup", "Protein Pudding"}
+        self.assertEqual(server.fuzzy_list_match("GHERKINS", keys), "Gerkins")
+        self.assertIsNone(server.fuzzy_list_match("PROTEIN WRAP", keys))
+        self.assertIsNone(server.fuzzy_list_match("SOUP TOMATO 400G", keys))          # strict: not a close spelling
+        self.assertEqual(server.fuzzy_list_match("SOUP TOMATO 400G", keys, loose=True), "Soup")
