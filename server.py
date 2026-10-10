@@ -1739,6 +1739,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def api_get(self, conn, path, q):
         if path == "/api/bootstrap":
+            receipt_tables(conn)
             ids = cycle(conn)
             this_id, next_id, vote_id = ids["thisWeekId"], ids["nextWeekId"], ids["voteWeekId"]
             shop_ids = {k: ids[k] for k in ("shopWeekId", "shopViewWeekId")}
@@ -1773,6 +1774,13 @@ class Handler(SimpleHTTPRequestHandler):
                 "morrisonsEnabled": morrisons_enabled(conn),
                 "vetoesPerPerson": vetoes_allowed(conn),
                 "extrasNeedPush": extras_need_push(conn),
+                # A shop that's done but whose receipt hasn't been scanned: the Shopping page offers it
+                # even after the calendar has moved on to the next shop.
+                "receiptDueWeekId": (lambda r: r["id"] if r else None)(conn.execute("""
+                    SELECT w.id FROM week w WHERE w.shop_closed=1
+                    AND w.start_date >= date('now','-14 days') AND w.start_date <= date('now','+7 days')
+                    AND NOT EXISTS (SELECT 1 FROM receipt r WHERE r.week_id=w.id)
+                    ORDER BY w.start_date DESC LIMIT 1""").fetchone()),
                 "boredDays": bored_days(conn),
                 "extrasFloodLimit": flood_settings(conn)[0], "extrasFloodTimeoutMin": flood_settings(conn)[1],
                 "lastBackup": (conn.execute("SELECT value FROM config WHERE key='last_backup'").fetchone() or {"value": None})["value"],

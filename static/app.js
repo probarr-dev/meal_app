@@ -669,6 +669,7 @@ async function boot() {
   S.allowHistoricEdits = !!b.allowHistoricEdits;
   S.extrasNeedPush = !!b.extrasNeedPush;
   S.boredDays = b.boredDays ?? 28;
+  S.receiptDueWeekId = b.receiptDueWeekId || null;
   S.extrasFloodLimit = b.extrasFloodLimit ?? 12; S.extrasFloodTimeoutMin = b.extrasFloodTimeoutMin ?? 15;
   S.lastBackup = b.lastBackup ? JSON.parse(b.lastBackup) : null;
   S.morrisonsEnabled = !!b.morrisonsEnabled;
@@ -1254,6 +1255,7 @@ async function viewShopping() {
         <h1>🧺 Cupboard check</h1>
         ${weekBannerHTML(S.weeks.find((w) => w.id === S.weekId)?.start_date || "")}</header>
       ${cycleStripHTML("shop")}
+      ${receiptDueHTML()}
       ${lsGet("mealplan-pantry-intro-hidden") ? `<div class="pantry-go no-print">
         <button id="headingOutBtn" class="ghost">✓ Heading to the shop →</button>
         <button id="pantryHelp" class="link-btn" title="Show the instructions" aria-label="Show the instructions">ⓘ</button></div>` : `
@@ -1288,6 +1290,7 @@ async function viewShopping() {
     })));
     const flip = (id, hidden) => { const el = document.getElementById(id); if (el) el.onclick = () => { lsSet("mealplan-pantry-intro-hidden", hidden); viewShopping(); }; };
     flip("pantryDismiss", 1); flip("pantryHelp", 0);
+    wireReceiptDue();
     const headingOut = document.getElementById("headingOutBtn");
     if (headingOut) headingOut.onclick = busy(headingOut, async () => {
       await api.post("/api/week/shopping-phase", { week_id: S.weekId, phase: "shopping" });
@@ -1366,6 +1369,7 @@ async function viewShopping() {
         <button onclick="window.print()" class="desktop-only" aria-label="Print list" title="Print list"><span aria-hidden="true">🖨️</span><span class="btn-label">Print</span></button>
       </div></header>
     ${cycleStripHTML("shop")}
+    ${receiptDueHTML()}
     ${offline ? `<div class="notice small warn no-print">📶 No connection — showing the list saved on this phone. Ticks are kept and sync when you're back online.</div>` : ""}
     ${(() => {
       const av = shopAverage(), has = estimate && estimate.high > 0;
@@ -1546,6 +1550,7 @@ async function viewShopping() {
   const shoppingText = () => groups.map((g) =>
     g.aisle.toUpperCase() + "\n" + g.items.map((i) => `  ${i.qty}  ${i.item}`).join("\n")).join("\n\n");
 
+  wireReceiptDue();
   const scanBtn = document.getElementById("scanReceiptBtn");
   if (scanBtn) scanBtn.onclick = () => receiptFlow();
   const rs = document.getElementById("receiptSummary");
@@ -3877,13 +3882,31 @@ function sameAmountVerdict(a, matches) {
 // Text comes from the phone's own Live Text (photo → select text → copy), so
 // no OCR library and the photo never leaves the phone. Lines are matched by
 // Aldi's product code; anything not on this week's list starts as a treat.
-function receiptFlow() {
+// A shop that's marked done but has no receipt yet. Shown on the Shopping page even after the
+// week has rolled over, when the page has moved on to the next shop.
+function receiptDueHTML() {
+  const id = S.receiptDueWeekId;
+  if (!id || !isParent() || lsGet(`mealplan-receipt-skip-${id}`)) return "";
+  const w = S.weeks.find((x) => x.id === id);
+  if (!w || (id === S.weekId && w.shop_closed)) return "";  // that page already has its own scan button
+  return `<div class="notice small receipt-due no-print">🧾 <span>Receipt for the <strong>${esc(fmtWeekRange(w.start_date))}</strong> shop not scanned yet.</span>
+    <button id="receiptDueGo" class="primary">Scan receipt</button>
+    <button id="receiptDueSkip" class="pantry-x" title="Not this time" aria-label="Hide this reminder">✕</button></div>`;
+}
+function wireReceiptDue() {
+  const go = document.getElementById("receiptDueGo");
+  if (go) go.onclick = () => receiptFlow(S.receiptDueWeekId);
+  const skip = document.getElementById("receiptDueSkip");
+  if (skip) skip.onclick = () => { lsSet(`mealplan-receipt-skip-${S.receiptDueWeekId}`, 1); viewShopping(); };
+}
+
+function receiptFlow(dueWeekId) {
   // A receipt belongs to the shop just done, which is usually NEXT week's (you shop
   // Friday for the week starting Saturday), not the week on screen. Default to the
   // newest week whose shop is marked done; let the parent change it.
   const wk = (id) => S.weeks.find((w) => w.id === id) || {};
-  const choices = [S.nextWeekId, S.thisWeekId].filter(Boolean);
-  const def = choices.find((id) => wk(id).shop_closed) || S.weekId;
+  const choices = [...new Set([dueWeekId, S.nextWeekId, S.thisWeekId].filter(Boolean))];
+  const def = dueWeekId || choices.find((id) => wk(id).shop_closed) || S.weekId;
   openModal("Scan receipt", `
     <label class="field"><span>Which shop is this?</span>
       <select id="rcWeek">${choices.map((id) => `<option value="${id}" ${id === def ? "selected" : ""}>${esc(fmtWeekRange(wk(id).start_date || ""))} (${weekWords(id)})</option>`).join("")}</select></label>

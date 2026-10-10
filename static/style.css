@@ -1581,3 +1581,8 @@ h1, .week-date, .tl-title, .simple-meal { text-rendering:geometricPrecision; }
 :root[data-notepad="1"] .meal-card .meal-pills { margin:0; padding:7px 0 7px; border-bottom:1px solid var(--pad-rule); }
 :root[data-notepad="1"] .meal-card .ing-preview { margin:0; padding:6px 0 6px; border-bottom:1px solid var(--pad-rule); }
 :root[data-notepad="1"] .meal-card .meal-foot { margin-top:0; padding-top:6px; }
+
+.receipt-due { display:flex; align-items:center; gap:10px; flex-wrap:wrap; position:relative; padding-right:36px; }
+.receipt-due span { flex:1 1 180px; }
+.receipt-due .primary { width:auto; margin:0; }
+.notice.receipt-due .pantry-x { position:absolute; top:2px; right:2px; }
