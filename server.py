@@ -2357,6 +2357,13 @@ class Handler(SimpleHTTPRequestHandler):
             for r_ in catalog:
                 r_["nextAvailable"] = reward_next_available(conn, int(person), r_) if person else None
             pace = points_pace(conn, int(person)) if person else 0
+            limits = {}
+            if is_parent(conn, self.me["id"]):  # when each child can next have each limited reward
+                for kid in rows(conn.execute("SELECT id FROM person WHERE is_placeholder=0 AND role!='parent'")):
+                    for r_ in catalog:
+                        n_ = reward_next_available(conn, kid["id"], r_)
+                        if n_:
+                            limits.setdefault(str(kid["id"]), {})[r_["id"]] = n_
             requests = rows(conn.execute("""
                 SELECT rd.*, p.name AS person_name, r.name AS reward_name, r.points_cost
                 FROM redemption rd JOIN person p ON p.id=rd.person_id JOIN reward r ON r.id=rd.reward_id
@@ -2371,7 +2378,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "myEarned": earned.get(int(person), 0) if person else 0,
                 "healthyTags": [t for t in healthy_tags.split(",") if t],
                 "pointsMode": points_mode(conn),
-                "pace": pace,
+                "pace": pace, "limits": limits,
             })
 
         if path == "/api/spending":
@@ -3507,9 +3514,11 @@ class Handler(SimpleHTTPRequestHandler):
             if bal < reward["points_cost"]:
                 return self.send_json({"error": f"Needs {reward['points_cost']} points, only has {bal}."}, 400)
             nxt = reward_next_available(conn, b["person_id"], reward)
-            if nxt:
+            if nxt and not b.get("override"):  # a parent can still say yes after being warned
                 return self.send_json({"error": f"That one is limited to every {reward['limit_days']} days. "
                                                 f"The next can be from {date.fromisoformat(nxt).strftime('%-d %b')}."}, 400)
+            if nxt:
+                b["note"] = (b.get("note") or "") + (" · " if b.get("note") else "") + "limit overridden"
             conn.execute("""INSERT INTO redemption(person_id,reward_id,status,budget_gbp,note,resolved_at,resolved_by)
                             VALUES (?,?,'approved',?,?,datetime('now'),?)""",
                          (b["person_id"], b["reward_id"], b.get("budget_gbp"), b.get("note", ""), b["actor_id"]))

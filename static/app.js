@@ -319,6 +319,9 @@ function busy(el, fn) {
     el.classList.add("busy");
     try {
       return await fn(...args);
+    } catch (e) {
+      // A failed request used to vanish silently (the button just did nothing). Say why.
+      if (e && e.message && e.message !== "Signed out") toast(e.message, "bad", 6500);
     } finally {
       el.disabled = false;
       el.classList.remove("busy");
@@ -3038,7 +3041,7 @@ async function viewSettings() {
 /* ---------------------------------------------------------------- rewards */
 
 async function viewRewards() {
-  const { balances, catalog, requests, myBalance, healthyTags, pointsMode = "all", pace = 0, earned = {}, myEarned = 0, history = [] } =
+  const { balances, catalog, requests, myBalance, healthyTags, pointsMode = "all", pace = 0, limits = {}, earned = {}, myEarned = 0, history = [] } =
     await api.get(`/api/rewards?person=${S.meId || ""}`);
   const parent = isParent();
   const nameOf = (id) => S.people.find((p) => p.id === id)?.name || "?";
@@ -3180,10 +3183,12 @@ async function viewRewards() {
         `<option value="${wid}:${d.dow}" data-when="${esc(d.dt.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }))}">${esc(d.dt.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" }))}${d.meal ? ` (instead of ${esc(d.meal.name)})` : " (empty)"}</option>`));
     const opts = catalog.filter((r) => r.points_cost <= bal);
     if (!opts.length) return toast(`${b.dataset.name} hasn't got enough points for anything yet.`, "bad");
+    const until = (r) => (limits[b.dataset.id] || {})[r.id];  // date this child can next have it, if limited
+    const fmtDay = (d) => new Date(d + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     openModal(`Redeem for ${b.dataset.name}`, `
       <p class="hint">${bal} points left to spend.</p>
       <label class="field"><span>Reward</span><select id="grantReward">${opts.map((r) =>
-        `<option value="${r.id}">${esc(r.name)} — ${r.points_cost} pts</option>`).join("")}</select></label>
+        `<option value="${r.id}">${esc(r.name)} — ${r.points_cost} pts${until(r) ? ` (limit: next ${fmtDay(until(r))})` : ""}</option>`).join("")}</select></label>
       <label class="field"><span>£ budget (optional)</span><input id="grantBudget" type="number" step="any"></label>
       ${swapMeals.length ? `<label class="field"><span>Swap a day's meal for it? (takes that meal off the shopping list)</span>
         <select id="grantDay"><option value="">— no, don't change the plan —</option>${dayChoices.join("")}</select></label>
@@ -3200,7 +3205,11 @@ async function viewRewards() {
     const go = document.getElementById("grantGo");
     go.onclick = busy(go, async () => {
       const budget = document.getElementById("grantBudget").value;
-      const res = await api.post("/api/redemption/grant", { actor_id: S.meId, person_id: +b.dataset.id,
+      const chosen = opts.find((r) => r.id === +document.getElementById("grantReward").value);
+      const blocked = chosen && until(chosen);
+      if (blocked && !(await confirmDialog(`${b.dataset.name} has had one within the last ${chosen.limit_days} days. The limit says the next is from ${fmtDay(blocked)}. Redeem it anyway?`,
+          { okLabel: "Redeem anyway" }))) return;
+      const res = await api.post("/api/redemption/grant", { actor_id: S.meId, person_id: +b.dataset.id, override: !!blocked,
         reward_id: +document.getElementById("grantReward").value, budget_gbp: budget ? +budget : null,
         note: document.getElementById("grantDay")?.value
           ? `${document.getElementById("grantSwapMeal").selectedOptions[0].text} on ${document.getElementById("grantDay").selectedOptions[0].dataset.when}` : "",
