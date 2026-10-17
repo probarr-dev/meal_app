@@ -19,7 +19,7 @@ import os
 import tempfile
 
 try:
-    from PIL import Image, ImageFilter, ImageOps
+    from PIL import Image, ImageChops, ImageFilter, ImageOps
     HAVE_PIL = True
 except ImportError:
     HAVE_PIL = False
@@ -92,16 +92,23 @@ def _deskew(img):
     return img.rotate(best, resample=Image.BICUBIC, expand=True, fillcolor=255) if abs(best) >= 0.2 else img
 
 
-def _prepare(data):
-    """Greyscale, upright, cropped to the paper, enlarged and contrast-stretched."""
+def _prepare_both(data):
+    """Two cleaned-up copies of the photo, same size and position: one contrast-stretched, one with the shadows and
+    the print showing through from the back taken out (the paper's local brightness is subtracted, so only dark ink
+    stays). They fail in different places, which is what makes comparing them useful."""
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img).convert("L")
     img = _deskew(_crop_to_paper(img))
     target = 1500  # a receipt is narrow: make its text big enough to read
     if img.width < target:
         img = img.resize((target, int(img.height * target / img.width)), Image.LANCZOS)
-    img = ImageOps.autocontrast(img, cutoff=1)
-    return img.filter(ImageFilter.SHARPEN)
+    clean = ImageChops.subtract(img.filter(ImageFilter.GaussianBlur(25)), img).point(lambda p: 0 if p > 28 else 255)
+    plain = ImageOps.autocontrast(img, cutoff=1).filter(ImageFilter.SHARPEN)
+    return plain, clean
+
+
+def _prepare(data):
+    return _prepare_both(data)[0]
 
 
 def row_bands(img, min_h=14, max_h=120):
@@ -282,7 +289,7 @@ def _near(a, b):
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 1 - 1.01 / max(len(a), len(b))
 
 
-READER_WEIGHT = {"A": 1.0, "D": 1.2, "B": 0.9}  # whole row by Tesseract, RapidOCR on the line, digits-only Tesseract
+READER_WEIGHT = {"A": 1.0, "A2": 1.0, "D": 1.2, "B": 0.9}  # whole row by Tesseract, RapidOCR on the line, digits-only Tesseract
 
 
 def _pick(cands, weights, support):
@@ -438,18 +445,51 @@ def combine(rows, total, known_prices=None, known_names=None):
     return items, notes
 
 
+def _merge_passes(rows, rows2):
+    """Line up the rows found in the two copies of the photo by height, so each line has a reading from each."""
+    allrows = [("A", r) for r in rows] + [("A2", r) for r in rows2]
+    allrows.sort(key=lambda kr: kr[1]["mid"])
+    prods = sorted(kr[1]["mid"] for kr in allrows if kr[0] == "A2" and _is_product_row(kr[1]))
+    gaps = sorted(b - a for a, b in zip(prods, prods[1:]) if b - a > 8)
+    pitch = gaps[len(gaps) // 2] if gaps else 60
+    tol = pitch * 0.45
+    clusters = []
+    for tag, r in allrows:
+        if clusters and abs(r["mid"] - clusters[-1]["mid"]) <= tol and tag not in clusters[-1]["texts"]:
+            c = clusters[-1]
+            c["texts"][tag] = r["text"]
+            c["members"].append(r)
+            c["mid"] = sum(m["mid"] for m in c["members"]) / len(c["members"])
+            if tag == "A":
+                c["words"] = r["words"]
+        else:
+            clusters.append({"mid": r["mid"], "texts": {tag: r["text"]}, "members": [r], "words": r["words"] if tag == "A" else []})
+    for c in clusters:
+        c["y0"] = int(min(m["y0"] for m in c["members"]))
+        c["y1"] = int(max(m["y1"] for m in c["members"]))
+        c["text"] = c["texts"].get("A") or c["texts"].get("A2") or ""
+        if not c["words"]:
+            c["words"] = c["members"][0]["words"]
+    return clusters
+
+
 def read_rows(data):
     """Image bytes -> (product rows with several readings each, the printed total or None)."""
-    img = _prepare(data)
-    rows = grouped_rows(_words(img))
-    prod = [r for r in rows if _is_product_row(r)]
+    img, clean = _prepare_both(data)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as pool:  # the two copies are read side by side
+        f0, f1 = pool.submit(_words, img), pool.submit(_words, clean)
+        rows, rows2 = grouped_rows(f0.result()), grouped_rows(f1.result())
+    rows = _merge_passes(rows, rows2)
+    prod = [r for r in rows if any(_is_product_row({"text": t}) for t in r["texts"].values())]
     total = None
     for r in rows:
-        m = re.search(r"(?i)(?:total|goods)\D*(\d+[.,]\d{2})", r["text"])
-        if m:
-            total = float(m.group(1).replace(",", "."))
+        for t in r["texts"].values():
+            m = re.search(r"(?i)(?:total|goods)\D*(\d+[.,]\d{2})", t)
+            if m:
+                total = float(m.group(1).replace(",", "."))
     if len(prod) < 3:
-        return [{"readings": [r["text"]], "name": r["text"]} for r in prod], total
+        return [{"readings": [(k, t) for k, t in r["texts"].items()], "name": ""} for r in prod], total
     # The printer sets lines at an even pitch. A gap about two pitches wide between two product rows is a row
     # the text finder skipped: add an empty row there so the other readers still get to look at it.
     ys = sorted((r["y0"] + r["y1"]) / 2 for r in prod)
@@ -480,14 +520,14 @@ def read_rows(data):
         rapid, codes, prices = f_rapid.result(), f_codes.result(), f_prices.result()
     out = []
     for i, r in enumerate(prod):
-        readings = [("A", r["text"])] if r["words"] else []
+        readings = [(k, t) for k, t in r.get("texts", {}).items() if t]
         for k, (j, _) in enumerate(variants):
             if j != i:
                 continue
             if rapid and k < len(rapid):
                 readings.append(("D", rapid[k]))
             readings.append(("B", f"{re.sub(r'[^0-9]', '', codes[k])} {prices[k]}"))
-        name = re.sub(r"^\W*[0-9§SOolI|]{4,8}\b", "", r["text"])
+        name = re.sub(r"^\W*[0-9§SOolI|]{4,8}\b", "", r.get("texts", {}).get("A") or r["text"])
         name = re.sub(r"\s+\d{1,3}[.,:]?\d{2}\s*[A-Z0-9]{0,3}\b.*$", "", name).strip(" .,:;_~-")
         out.append({"readings": readings, "name": name})
     return out, total
