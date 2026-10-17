@@ -99,6 +99,10 @@ works and notifications simply show as unavailable. Set `PUSH_CONTACT=mailto:you
 because Apple's push service rejects a placeholder contact. Notification text is end-to-end
 encrypted to each device, so the browser's push service (Google or Apple) only relays opaque data.
 
+Receipt photos are read on your own server, with nothing sent to a cloud service. This needs
+`apt install tesseract-ocr python3-pil`. Without them the Scan receipt screen still takes pasted text.
+The last 20 photos are kept in `data/receipt_photos/` so a receipt that reads badly can be looked at.
+
 ## Privacy and the network
 
 - **Sign-in:** everyone has their own username and password, hashed with scrypt (PBKDF2 where
