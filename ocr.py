@@ -276,7 +276,9 @@ def combine(rows, total, known_prices=None, known_names=None):
                 c = max(near, key=lambda x: code_support[x]) if near else c
             fixed.append(c)
         code = _pick(fixed, code_support, first)
-        if code and len(code) == 6 and code not in known_prices:
+        # Codes one character apart are often two real products (384368 chicken, 384381 salmon), so a code that
+        # more than one reading of this very line agrees on is never "corrected" towards another.
+        if code and len(code) == 6 and code not in known_prices and fixed.count(code) < 2:
             near = [x for x in code_support if x != code and _near(code, x) and code_support[x] - 1 > code_support[code]]
             if len(near) == 1:  # almost a code that is read much more often: a misread of it
                 code = near[0]

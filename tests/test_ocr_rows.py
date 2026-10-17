@@ -50,3 +50,12 @@ class Combine(unittest.TestCase):
         items, notes = ocr.combine(rows, 1.59)
         self.assertEqual(round(sum(float(i["price"]) for i in items), 2), 1.59)
         self.assertTrue(notes)
+
+
+class NearbyCodes(unittest.TestCase):
+    def test_two_real_products_one_digit_apart_stay_two(self):
+        rows = [{"readings": ["384381 SALMON 4.29 A", "384381 4.29"], "name": "SALMON"},
+                {"readings": ["384381 SALMON 4.29 A", "384381 4.29"], "name": "SALMON"},
+                {"readings": ["384368 CHICKEN 2.99 A", "384368 2.99"], "name": "CHICKEN"}]
+        items, _ = ocr.combine(rows, 11.57, known_prices={"384381": ["4.29"]})
+        self.assertEqual([(i["code"], i["price"]) for i in items], [("384381", "4.29"), ("384381", "4.29"), ("384368", "2.99")])
