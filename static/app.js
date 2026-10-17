@@ -3984,12 +3984,36 @@ function receiptFlow(dueWeekId) {
   openModal("Scan receipt", `
     <label class="field"><span>Which shop is this?</span>
       <select id="rcWeek">${choices.map((id) => `<option value="${id}" ${id === def ? "selected" : ""}>${esc(fmtWeekRange(wk(id).start_date || ""))} (${weekWords(id)})</option>`).join("")}</select></label>
-    <ol class="install-steps" style="font-size:.9rem;margin-top:0">
+    <label class="plan-done-btn rc-photo-btn" style="position:static;display:block;text-align:center;margin:0 0 6px">📷 Photograph the receipt
+      <input type="file" id="rcPhoto" accept="image/*" hidden></label>
+    <p class="hint" style="margin:0 0 10px;text-align:center">Lay it flat in good light, the whole receipt in the shot. The server reads it; nothing leaves your network.</p>
+    <details class="rc-paste"><summary class="hint">Or paste the text instead</summary>
+    <ol class="install-steps" style="font-size:.9rem;margin-top:6px">
       <li>Open the <strong>Camera</strong> and point it at the receipt (or take a photo).</li>
       <li>Tap the <strong>text icon</strong> ▤ in the corner, then <strong>Select All → Copy</strong>.</li>
       <li>Paste it below.</li></ol>
     <textarea id="rcText" rows="8" placeholder="Paste receipt text here" style="width:100%;font-family:ui-monospace,monospace;font-size:16px"></textarea>
-    <button id="rcRead" class="plan-done-btn" style="position:static;margin-top:10px">Read receipt</button>`);
+    <button id="rcRead" class="plan-done-btn" style="position:static;margin-top:10px">Read receipt</button></details>`);
+  const photo = document.getElementById("rcPhoto");
+  photo.onchange = async () => {
+    const file = photo.files[0]; photo.value = "";
+    if (!file) return;
+    const label = document.querySelector(".rc-photo-btn");
+    label.firstChild.textContent = "⏳ Reading the receipt… (about 20 seconds)";
+    try {
+      // Shrink on the phone first: a camera photo is far bigger than the text needs.
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+      const weekId = +document.getElementById("rcWeek").value;
+      const r = await api.post("/api/receipt/photo", { actor_id: S.meId, week_id: weekId, image: cv.toDataURL("image/jpeg", 0.85) });
+      receiptReview(weekId, r);
+    } catch (ex) {
+      label.firstChild.textContent = "📷 Photograph the receipt";
+      toast(ex.message, "bad", 7000);
+    }
+  };
   const go = document.getElementById("rcRead");
   go.onclick = busy(go, async () => {
     const weekId = +document.getElementById("rcWeek").value;

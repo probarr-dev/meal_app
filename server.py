@@ -10,11 +10,13 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import auth
+import ocr
 import push
 from datetime import date, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -1663,7 +1665,7 @@ def notify_extra_ask(conn, person_id, item, request_id):
                     extra={"tag": f"extra_request-{request_id}", "requestId": request_id})
 
 
-READ_ONLY_POSTS = {"/api/receipt/summary", "/api/receipt/parse", "/api/compare/list", "/api/week/ensure"}
+READ_ONLY_POSTS = {"/api/receipt/summary", "/api/receipt/parse", "/api/receipt/photo", "/api/compare/list", "/api/week/ensure"}
 
 # Never sent to the browser or put in an export.
 SECRET_PERSON_FIELDS = ("pw_hash", "failed_logins", "locked_until", "pin_hash", "pin_default", "link_token")
@@ -3093,25 +3095,43 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"rows": out})
 
-        if path == "/api/receipt/parse":
+        if path in ("/api/receipt/parse", "/api/receipt/photo"):
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Parents only."}, 403)
-            lines, total, count = parse_receipt(b.get("text", ""))
-            # Keep the pasted text of the last few attempts, so a receipt that won't read can be looked at.
+            text, photo_name = b.get("text", ""), None
+            if path == "/api/receipt/photo":
+                if not ocr.available():
+                    return self.send_json({"error": "Reading photos isn't set up on this server (needs tesseract and Pillow). Paste the receipt text instead."}, 501)
+                try:
+                    data = base64.b64decode((b.get("image") or "").split(",")[-1], validate=True)
+                    # Keep the last few photos beside the database: a receipt that reads badly can be looked at.
+                    folder = os.path.join(os.path.dirname(DB_PATH), "receipt_photos")
+                    os.makedirs(folder, exist_ok=True)
+                    photo_name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
+                    with open(os.path.join(folder, photo_name), "wb") as f:
+                        f.write(data)
+                    for old_ in sorted(os.listdir(folder))[:-20]:
+                        os.remove(os.path.join(folder, old_))
+                    text = ocr.read_receipt(data)
+                except Exception as e:
+                    return self.send_json({"error": f"Couldn't read that photo ({type(e).__name__}). Try a flatter, brighter shot."}, 400)
+            lines, total, count = parse_receipt(text)
+            # Keep the text of the last few attempts, so a receipt that won't read can be looked at.
             conn.execute("""CREATE TABLE IF NOT EXISTS receipt_debug (
                 id INTEGER PRIMARY KEY, week_id INTEGER, text TEXT, lines_found INTEGER, total REAL,
                 created_at TEXT DEFAULT (datetime('now')))""")
             conn.execute("INSERT INTO receipt_debug(week_id,text,lines_found,total) VALUES (?,?,?,?)",
-                         (b.get("week_id"), (b.get("text") or "")[:20000], len(lines), total))
+                         (b.get("week_id"), ((f"[photo {photo_name}]\n" if photo_name else "") + (text or ""))[:20000], len(lines), total))
             conn.execute("DELETE FROM receipt_debug WHERE id NOT IN (SELECT id FROM receipt_debug ORDER BY id DESC LIMIT 20)")
             conn.commit()
             if not lines:
-                return self.send_json({"error": "Couldn't find any item lines. A copy has been kept so it can be looked at."}, 400)
+                return self.send_json({"error": ("Couldn't find any item lines in that photo. " if photo_name else "Couldn't find any item lines. ")
+                                                + "A copy has been kept so it can be looked at."}, 400)
             lines = classify_receipt(conn, b["week_id"], lines)
             s_ = round(sum(l["amount"] for l in lines), 2)
             n_ = sum(l["qty"] for l in lines if not l.get("deposit"))
             return self.send_json({"lines": lines, "total": total, "count": count, "sum": s_, "items": n_,
-                                   "listItems": receipt_list_items(conn, b["week_id"])})
+                                   "listItems": receipt_list_items(conn, b["week_id"]), "fromPhoto": bool(photo_name)})
 
         if path == "/api/receipt/save":
             if not is_parent(conn, b.get("actor_id")):
