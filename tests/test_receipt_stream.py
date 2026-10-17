@@ -92,3 +92,12 @@ class Fuzzy(unittest.TestCase):
         self.assertIsNone(server.fuzzy_list_match("PROTEIN WRAP", keys))
         self.assertIsNone(server.fuzzy_list_match("SOUP TOMATO 400G", keys))          # strict: not a close spelling
         self.assertEqual(server.fuzzy_list_match("SOUP TOMATO 400G", keys, loose=True), "Soup")
+
+
+class TypedReceipt(unittest.TestCase):
+    def test_a_clean_long_receipt_parses_to_its_printed_total(self):
+        text = open(os.path.join(os.path.dirname(__file__), "fixtures", "receipt_17oct_truth.txt")).read()
+        lines, total, _ = server.parse_receipt(text)
+        self.assertEqual(total, 147.95)
+        self.assertEqual(round(sum(l["amount"] for l in lines), 2), 147.95)
+        self.assertEqual(sum(l["qty"] for l in lines), 91)

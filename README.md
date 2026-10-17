@@ -103,6 +103,18 @@ Receipt photos are read on your own server, with nothing sent to a cloud service
 `apt install tesseract-ocr python3-pil`. Without them the Scan receipt screen still takes pasted text.
 The last 20 photos are kept in `data/receipt_photos/` so a receipt that reads badly can be looked at.
 
+For better accuracy add a second reader, which votes against the first on every line:
+
+    apt install python3-venv
+    python3 -m venv --system-site-packages venv
+    venv/bin/pip install rapidocr-onnxruntime opencv-python-headless
+
+Each line is read three ways (the whole row, the code and price on their own, and RapidOCR), repeated
+products must agree, earlier receipts and the shop's own prices correct a misread digit, and the lines
+must add up to the printed total. A photo takes about a minute and a half and about 1 GB of memory
+while it runs. `tools/receipt_eval.py photo.jpg typed-copy.txt` scores the reader against a typed copy
+of the same receipt.
+
 ## Privacy and the network
 
 - **Sign-in:** everyone has their own username and password, hashed with scrypt (PBKDF2 where

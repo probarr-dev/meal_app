@@ -3999,7 +3999,7 @@ function receiptFlow(dueWeekId) {
     const file = photo.files[0]; photo.value = "";
     if (!file) return;
     const label = document.querySelector(".rc-photo-btn");
-    label.firstChild.textContent = "⏳ Reading the receipt… (about 20 seconds)";
+    label.firstChild.textContent = "⏳ Sending the photo…";
     try {
       // Shrink on the phone first: a camera photo is far bigger than the text needs.
       const bmp = await createImageBitmap(file);
@@ -4007,8 +4007,15 @@ function receiptFlow(dueWeekId) {
       const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
       cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
       const weekId = +document.getElementById("rcWeek").value;
-      const r = await api.post("/api/receipt/photo", { actor_id: S.meId, week_id: weekId, image: cv.toDataURL("image/jpeg", 0.85) });
-      receiptReview(weekId, r);
+      const { job } = await api.post("/api/receipt/photo", { actor_id: S.meId, week_id: weekId, image: cv.toDataURL("image/jpeg", 0.85) });
+      // Reading takes over a minute, so the server works in the background and we ask how it's getting on.
+      for (;;) {
+        await new Promise((res) => setTimeout(res, 3000));
+        const j = await api.get(`/api/receipt/job?id=${encodeURIComponent(job)}`);
+        if (j.status === "done") { receiptReview(weekId, j.result); return; }
+        if (j.status === "error") throw new Error(j.error);
+        label.firstChild.textContent = `⏳ Reading the receipt… ${j.seconds}s (keep this open)`;
+      }
     } catch (ex) {
       label.firstChild.textContent = "📷 Photograph the receipt";
       toast(ex.message, "bad", 7000);

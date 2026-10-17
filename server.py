@@ -1225,6 +1225,59 @@ def fuzzy_list_match(text, keys, loose=False):
     return None
 
 
+def receipt_history(conn):
+    """What earlier receipts and Aldi's own listings say each product code costs and is called,
+    used to repair a photo reading: ({code: [prices]}, {code: NAME})."""
+    receipt_tables(conn)
+    prices, names = {}, {}
+    for r in conn.execute("SELECT code, text, amount, qty FROM receipt_line WHERE code IS NOT NULL AND code != ''"):
+        qty = r["qty"] or 1
+        if abs(r["amount"] / qty * 100 - round(r["amount"] / qty * 100)) < 0.01:  # a whole-pence unit price (a multi-buy line holds the total)
+            prices.setdefault(r["code"], []).append(f"{r['amount'] / qty:.2f}")
+        names.setdefault(r["code"], r["text"])
+    for r in conn.execute("SELECT sku, price FROM price_product WHERE COALESCE(store,'aldi')='aldi' AND price > 0"):
+        core = r["sku"].lstrip("0")[:6]
+        prices.setdefault(core, []).append(f"{r['price']:.2f}")
+    return prices, names
+
+
+PHOTO_JOBS = {}
+PHOTO_LOCK = threading.Lock()  # one photo at a time: reading one takes about a gigabyte of memory
+
+
+def run_photo_job(job_id, data, week_id, photo_name):
+    """Read a receipt photo in the background and leave the answer in PHOTO_JOBS[job_id]. A reading takes over a
+    minute, longer than a reverse proxy waits for a reply, so the phone asks again until it's done."""
+    job = PHOTO_JOBS[job_id]
+    with PHOTO_LOCK:
+        try:
+            with db() as conn:
+                kp, kn = receipt_history(conn)
+            text = ocr.read_receipt(data, kp, kn)
+            with db() as conn:
+                lines, total, count = parse_receipt(text)
+                conn.execute("""CREATE TABLE IF NOT EXISTS receipt_debug (
+                    id INTEGER PRIMARY KEY, week_id INTEGER, text TEXT, lines_found INTEGER, total REAL,
+                    created_at TEXT DEFAULT (datetime('now')))""")
+                conn.execute("INSERT INTO receipt_debug(week_id,text,lines_found,total) VALUES (?,?,?,?)",
+                             (week_id, f"[photo {photo_name}]\n{text}"[:20000], len(lines), total))
+                conn.execute("DELETE FROM receipt_debug WHERE id NOT IN (SELECT id FROM receipt_debug ORDER BY id DESC LIMIT 20)")
+                conn.commit()
+                if not lines:
+                    job.update(status="error", error="Couldn't find any item lines in that photo. A copy has been kept so it can be looked at.")
+                    return
+                lines = classify_receipt(conn, week_id, lines)
+                job.update(status="done", result={
+                    "lines": lines, "total": total, "count": count,
+                    "sum": round(sum(l["amount"] for l in lines), 2),
+                    "items": sum(l["qty"] for l in lines if not l.get("deposit")),
+                    "listItems": receipt_list_items(conn, week_id), "fromPhoto": True})
+        except Exception as e:  # never leave the phone waiting on a job that died
+            job.update(status="error", error=f"Couldn't read that photo ({type(e).__name__}). Try a flatter, brighter shot.")
+    for old_id in [k for k, v in PHOTO_JOBS.items() if time.time() - v["started"] > 3600]:
+        PHOTO_JOBS.pop(old_id, None)
+
+
 def classify_receipt(conn, week_id, lines):
     receipt_tables(conn)
     code_to_item = {}
@@ -2163,6 +2216,18 @@ class Handler(SimpleHTTPRequestHandler):
             archived = rows(conn.execute("SELECT id, name FROM meal WHERE deleted_at IS NOT NULL ORDER BY name"))
             return self.send_json({"unused": unused, "archived": archived})
 
+        if path == "/api/receipt/job":
+            if self.me["role"] != "parent":
+                return self.send_json({"error": "Parents only."}, 403)
+            job = PHOTO_JOBS.get(q.get("id", [""])[0])
+            if not job:
+                return self.send_json({"error": "That reading has gone. Photograph the receipt again."}, 404)
+            if job["status"] == "reading":
+                return self.send_json({"status": "reading", "seconds": int(time.time() - job["started"])})
+            if job["status"] == "error":
+                return self.send_json({"status": "error", "error": job["error"]})
+            return self.send_json({"status": "done", "result": job["result"]})
+
         if path == "/api/ideas":
             if self.me["role"] != "parent":
                 return self.send_json({"error": "Parents only."}, 403)
@@ -3095,43 +3160,48 @@ class Handler(SimpleHTTPRequestHandler):
             conn.commit()
             return self.send_json({"rows": out})
 
-        if path in ("/api/receipt/parse", "/api/receipt/photo"):
+        if path == "/api/receipt/photo":
             if not is_parent(conn, b.get("actor_id")):
                 return self.send_json({"error": "Parents only."}, 403)
-            text, photo_name = b.get("text", ""), None
-            if path == "/api/receipt/photo":
-                if not ocr.available():
-                    return self.send_json({"error": "Reading photos isn't set up on this server (needs tesseract and Pillow). Paste the receipt text instead."}, 501)
-                try:
-                    data = base64.b64decode((b.get("image") or "").split(",")[-1], validate=True)
-                    # Keep the last few photos beside the database: a receipt that reads badly can be looked at.
-                    folder = os.path.join(os.path.dirname(DB_PATH), "receipt_photos")
-                    os.makedirs(folder, exist_ok=True)
-                    photo_name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
-                    with open(os.path.join(folder, photo_name), "wb") as f:
-                        f.write(data)
-                    for old_ in sorted(os.listdir(folder))[:-20]:
-                        os.remove(os.path.join(folder, old_))
-                    text = ocr.read_receipt(data)
-                except Exception as e:
-                    return self.send_json({"error": f"Couldn't read that photo ({type(e).__name__}). Try a flatter, brighter shot."}, 400)
+            if not ocr.available():
+                return self.send_json({"error": "Reading photos isn't set up on this server (needs tesseract and Pillow). Paste the receipt text instead."}, 501)
+            try:
+                data = base64.b64decode((b.get("image") or "").split(",")[-1], validate=True)
+            except Exception:
+                return self.send_json({"error": "That photo didn't arrive properly. Try again."}, 400)
+            # Keep the last few photos beside the database: a receipt that reads badly can be looked at.
+            folder = os.path.join(os.path.dirname(DB_PATH), "receipt_photos")
+            os.makedirs(folder, exist_ok=True)
+            photo_name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
+            with open(os.path.join(folder, photo_name), "wb") as f:
+                f.write(data)
+            for old_ in sorted(os.listdir(folder))[:-20]:
+                os.remove(os.path.join(folder, old_))
+            job_id = base64.urlsafe_b64encode(os.urandom(9)).decode()
+            PHOTO_JOBS[job_id] = {"status": "reading", "started": time.time()}
+            threading.Thread(target=run_photo_job, args=(job_id, data, b["week_id"], photo_name), daemon=True).start()
+            return self.send_json({"job": job_id})
+
+        if path == "/api/receipt/parse":
+            if not is_parent(conn, b.get("actor_id")):
+                return self.send_json({"error": "Parents only."}, 403)
+            text = b.get("text", "")
             lines, total, count = parse_receipt(text)
             # Keep the text of the last few attempts, so a receipt that won't read can be looked at.
             conn.execute("""CREATE TABLE IF NOT EXISTS receipt_debug (
                 id INTEGER PRIMARY KEY, week_id INTEGER, text TEXT, lines_found INTEGER, total REAL,
                 created_at TEXT DEFAULT (datetime('now')))""")
             conn.execute("INSERT INTO receipt_debug(week_id,text,lines_found,total) VALUES (?,?,?,?)",
-                         (b.get("week_id"), ((f"[photo {photo_name}]\n" if photo_name else "") + (text or ""))[:20000], len(lines), total))
+                         (b.get("week_id"), (text or "")[:20000], len(lines), total))
             conn.execute("DELETE FROM receipt_debug WHERE id NOT IN (SELECT id FROM receipt_debug ORDER BY id DESC LIMIT 20)")
             conn.commit()
             if not lines:
-                return self.send_json({"error": ("Couldn't find any item lines in that photo. " if photo_name else "Couldn't find any item lines. ")
-                                                + "A copy has been kept so it can be looked at."}, 400)
+                return self.send_json({"error": "Couldn't find any item lines. A copy has been kept so it can be looked at."}, 400)
             lines = classify_receipt(conn, b["week_id"], lines)
             s_ = round(sum(l["amount"] for l in lines), 2)
             n_ = sum(l["qty"] for l in lines if not l.get("deposit"))
             return self.send_json({"lines": lines, "total": total, "count": count, "sum": s_, "items": n_,
-                                   "listItems": receipt_list_items(conn, b["week_id"]), "fromPhoto": bool(photo_name)})
+                                   "listItems": receipt_list_items(conn, b["week_id"])})
 
         if path == "/api/receipt/save":
             if not is_parent(conn, b.get("actor_id")):
