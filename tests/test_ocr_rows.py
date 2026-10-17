@@ -59,3 +59,12 @@ class NearbyCodes(unittest.TestCase):
                 {"readings": ["384368 CHICKEN 2.99 A", "384368 2.99"], "name": "CHICKEN"}]
         items, _ = ocr.combine(rows, 11.57, known_prices={"384381": ["4.29"]})
         self.assertEqual([(i["code"], i["price"]) for i in items], [("384381", "4.29"), ("384381", "4.29"), ("384368", "2.99")])
+
+
+class Output(unittest.TestCase):
+    def test_a_line_with_no_readable_name_still_parses(self):
+        import server
+        items = [{"code": "339791", "name": "", "price": "0.49", "vat": "A"}]
+        text = "\n".join("%s %s %s %s" % (i["code"], i["name"] or "UNREAD NAME", i["price"], i["vat"]) for i in items)
+        lines, _, _ = server.parse_receipt(text)
+        self.assertEqual([(l["code"], l["amount"]) for l in lines], [("339791", 0.49)])

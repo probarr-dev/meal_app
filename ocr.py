@@ -10,6 +10,7 @@ rows are rebuilt by height and each line reads "code name price", which the pars
 import csv
 import difflib
 import io
+import itertools
 import re
 import shutil
 from collections import Counter
@@ -28,39 +29,74 @@ def available():
     return HAVE_PIL and shutil.which("tesseract") is not None
 
 
+def _runs(values, threshold):
+    """Stretches of consecutive positions where values stay above the threshold, as (start, end)."""
+    runs, start = [], None
+    for i, v in enumerate(values + [0]):
+        if v > threshold and start is None:
+            start = i
+        elif v <= threshold and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    return runs
+
+
+def _smooth(values, r):
+    out = []
+    for i in range(len(values)):
+        seg = values[max(0, i - r):i + r + 1]
+        out.append(sum(seg) / len(seg))
+    return out
+
+
 def _crop_to_paper(img):
-    """Find the receipt strip (the bright paper) in the photo and cut everything else away: a dark table,
-    a hob or a kitchen worktop all confuse the text finder."""
-    small = img.resize((max(1, img.width // 4), max(1, img.height // 4)))
-    px = small.load()
+    """Find the receipt in the photo by where the printing is. Dense small text makes a lot of edges; a table,
+    a shadow or a glossy hob makes few. (Brightness alone fails on a pale worktop.)"""
+    k = 4
+    small = img.resize((max(1, img.width // k), max(1, img.height // k)))
+    edges = small.filter(ImageFilter.FIND_EDGES).point(lambda p: 255 if p > 45 else 0)
     w, h = small.size
-    bright = [sum(1 for y in range(h) if px[x, y] > 165) / h for x in range(w)]
-    cols = [x for x in range(w) if bright[x] > 0.35]
-    if not cols:
+    cols = _smooth(list(edges.resize((w, 1), Image.BOX).getdata()), 4)
+    runs = _runs(cols, 0.35 * max(cols))
+    if not runs:
         return img
-    # the widest unbroken run of paper-coloured columns
-    best, run = (cols[0], cols[0]), [cols[0], cols[0]]
-    for x in cols[1:]:
-        if x - run[1] <= 2:
-            run[1] = x
+    merged = [list(runs[0])]  # names and prices are separate blocks with a gap between: join them
+    for a, b in runs[1:]:
+        if a - merged[-1][1] <= w * 0.12:
+            merged[-1][1] = b
         else:
-            run = [x, x]
-        if run[1] - run[0] > best[1] - best[0]:
-            best = (run[0], run[1])
-    if best[1] - best[0] < w * 0.08:  # nothing paper-like: leave the photo alone
+            merged.append([a, b])
+    x0, x1 = max(merged, key=lambda r: r[1] - r[0])
+    if x1 - x0 < w * 0.08:  # nothing receipt-shaped: leave the photo alone
         return img
-    rows = [y for y in range(h) if sum(1 for x in range(best[0], best[1]) if px[x, y] > 165) > (best[1] - best[0]) * 0.35]
-    top, bottom = (rows[0], rows[-1]) if rows else (0, h - 1)
-    pad = 3
-    return img.crop((max(0, (best[0] - pad) * 4), max(0, (top - pad) * 4),
-                     min(img.width, (best[1] + pad) * 4), min(img.height, (bottom + pad) * 4)))
+    band = edges.crop((x0, 0, x1 + 1, h))
+    rows = _smooth(list(band.resize((1, h), Image.BOX).getdata()), 3)
+    rr = _runs(rows, 0.25 * max(rows))
+    top, bottom = (rr[0][0], rr[-1][1]) if rr else (0, h - 1)
+    padx, pady = int((x1 - x0) * 0.04) + 3, 6
+    return img.crop((max(0, (x0 - padx) * k), max(0, (top - pady) * k),
+                     min(img.width, (x1 + padx) * k), min(img.height, (bottom + pady) * k)))
+
+
+def _deskew(img):
+    """A receipt photographed by hand is a few degrees off, which drifts the rows across the width. Try small
+    turns and keep the one where the printed lines come out sharpest (most uneven row-to-row ink)."""
+    small = img.resize((600, max(1, int(img.height * 600 / img.width)))).point(lambda p: 255 if p < 140 else 0)
+
+    def sharpness(angle):
+        prof = list(small.rotate(angle, fillcolor=0).resize((1, small.height), Image.BOX).getdata())
+        mean = sum(prof) / len(prof)
+        return sum((v - mean) ** 2 for v in prof)
+    best = max((a / 2 for a in range(-12, 13)), key=sharpness)  # -6..6 degrees in half-degree steps
+    best = max((best + d / 10 for d in range(-4, 5)), key=sharpness)
+    return img.rotate(best, resample=Image.BICUBIC, expand=True, fillcolor=255) if abs(best) >= 0.2 else img
 
 
 def _prepare(data):
     """Greyscale, upright, cropped to the paper, enlarged and contrast-stretched."""
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img).convert("L")
-    img = _crop_to_paper(img)
+    img = _deskew(_crop_to_paper(img))
     target = 1500  # a receipt is narrow: make its text big enough to read
     if img.width < target:
         img = img.resize((target, int(img.height * target / img.width)), Image.LANCZOS)
@@ -223,11 +259,17 @@ def _rapid_lines(img, boxes, workers=3):
 def _fields(text):
     """(code, price, vat) as one reader saw them in a line of text; each None if not found."""
     t = text.strip()
-    m = re.match(r"^\W*([0-9§SOolI|]{5,8})", t)
+    # digits first: a reader that drops the spaces hands us "335812SAUCE...", where S must not become a 5
+    m = re.match(r"^\W*(\d{5,7})", t) or re.match(r"^\W*([0-9§SOolI|]{5,8})\b", t)
     code = m.group(1).translate(CODE_FIX) if m else None
-    nums = PRICE_RE.findall(t.replace("O", "0"))
-    price = f"{nums[-1][0]}.{nums[-1][1]}" if nums else None
-    vat = "B" if re.search(r"\d[.,]\d{2}\s*[A-Z0-9]?B", t) or re.search(r"\d[.,]\d{2}\s*8", t) else "A"
+    tt = t.replace("O", "0")
+    nums = PRICE_RE.findall(tt)
+    if nums:
+        price = f"{nums[-1][0]}.{nums[-1][1]}"
+    else:  # "1 49 B": the point was read as a space
+        sp = re.search(r"(?<!\d)(\d{1,2})\s(\d{2})\s*[AB]\s*\W*$", tt)
+        price = f"{sp.group(1)}.{sp.group(2)}" if sp else None
+    vat = "B" if re.search(r"\d[.,]\d{2}\s*[A-Z0-9]?B", t) or re.search(r"\d[.,]\d{2}\s*8", t) or re.search(r"\d\s?\d{2}\s*B\b", t) else "A"
     return code, price, vat
 
 
@@ -240,22 +282,42 @@ def _near(a, b):
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 1 - 1.01 / max(len(a), len(b))
 
 
-def _pick(cands, support, priority):
-    """Choose between readings: two readers agreeing wins; otherwise the best supported; otherwise reader order."""
-    cands = [c for c in cands if c]
-    if not cands:
+READER_WEIGHT = {"A": 1.0, "D": 1.2, "B": 0.9}  # whole row by Tesseract, RapidOCR on the line, digits-only Tesseract
+
+
+def _pick(cands, weights, support):
+    """Choose between readings: each reading votes with its reader's weight (the neural reader's line is the one to
+    trust when the others disagree), plus a little for anything else on the receipt that backs the same value."""
+    scored = {}
+    for c, w in zip(cands, weights):
+        if c:
+            scored[c] = scored.get(c, 0) + w
+    if not scored:
         return None
-    counts = Counter(cands)
-    top = counts.most_common(1)[0]
-    if top[1] >= 2:
-        return top[0]
-    return max(cands, key=lambda c: (support.get(c, 0), -priority(cands, c)))
+    return max(scored, key=lambda c: (scored[c] + 0.25 * min(support.get(c, 0), 4), -list(cands).index(c)))
 
 
 def combine(rows, total, known_prices=None, known_names=None):
     """rows: [{"readings": [text, ...] (best reader first), "name": str}] -> [{"code","name","price","vat"}], notes."""
     known_prices, known_names = known_prices or {}, known_names or {}
-    parsed = [[_fields(t) for t in r["readings"]] for r in rows]
+    def reading_parts(r):
+        texts, weights = [], []
+        for k, x in enumerate(r["readings"]):
+            tag, text = x if isinstance(x, tuple) else (None, x)
+            texts.append(text)
+            weights.append(READER_WEIGHT.get(tag, 1.0))
+        return texts, weights
+
+    def clean(tag_text):
+        tag, text = tag_text
+        code, price, vat = _fields(text)
+        if tag == "B":  # the digits-only reader's output is only usable when it looks like a code and a price
+            code = code if code and len(code) == 6 else None
+            price = price if price and re.fullmatch(r"\d{1,2}\.\d{2}", price) else None
+        return code, price, vat
+
+    parsed = [[clean((x[0] if isinstance(x, tuple) else None, x[1] if isinstance(x, tuple) else x)) for x in r["readings"]] for r in rows]
+    wts = [reading_parts(r)[1] for r in rows]
     # how often each code and each (code, price) is read anywhere on the receipt, and in earlier receipts
     code_support = Counter()
     for fields in parsed:
@@ -264,18 +326,22 @@ def combine(rows, total, known_prices=None, known_names=None):
                 code_support[c] += 1
     for c in known_prices:
         code_support[c] += 3
-    first = lambda cands, c: cands.index(c)  # earlier reader = more trusted
     out = []
-    for r, fields in zip(rows, parsed):
+    for r, fields, weights in zip(rows, parsed, wts):
         codes = [c for c, _, _ in fields]
-        # a 7- or 5-digit reading is a 6-digit code with one character added or lost: repair it if a 6-digit reading says how
+        # a 7- or 8-digit reading is a 6-digit code with stray digits added, a 5-digit one has lost one: repair it
+        # if another reading of some line says which 6 digits are real
         fixed = []
         for c in codes:
-            if c and len(c) != 6:
+            if c and len(c) > 6:
+                cands = {"".join(ch for k, ch in enumerate(c) if k not in drop) for drop in itertools.combinations(range(len(c)), len(c) - 6)}
+                supported = [x for x in cands if code_support.get(x)]
+                c = max(supported, key=lambda x: code_support[x]) if supported else c
+            elif c and len(c) != 6:
                 near = [x for x in code_support if len(x) == 6 and _near(c, x)]
                 c = max(near, key=lambda x: code_support[x]) if near else c
             fixed.append(c)
-        code = _pick(fixed, code_support, first)
+        code = _pick(fixed, weights, code_support)
         # Codes one character apart are often two real products (384368 chicken, 384381 salmon), so a code that
         # more than one reading of this very line agrees on is never "corrected" towards another.
         if code and len(code) == 6 and code not in known_prices and fixed.count(code) < 2:
@@ -285,14 +351,29 @@ def combine(rows, total, known_prices=None, known_names=None):
         out.append({"code": code, "prices": [p for _, p, _ in fields], "vat": next((v for _, p, v in fields if p), "A"), "name": r["name"]})
     # prices: repeated products must agree, and earlier receipts say what it cost before
     price_support = Counter()
+    def sane(p):
+        return p and re.fullmatch(r"[1-9]\d?\.\d{2}|0\.\d{2}", p) and float(p) < 60
+
+    for o in out:  # a price with stray leading digits ("11.35", "04.49", "271.19") is noise beside a real one
+        extra = []
+        for p in o["prices"]:
+            if p and not sane(p):
+                int_part, pence = p.split(".")
+                extra += [f"{int_part[k:].lstrip('0') or '0'}.{pence}" for k in range(1, len(int_part))]
+        allp = o["prices"] + [x for x in extra if sane(x)]
+        o["prices"] = [p for p in allp if sane(p)] or allp  # a sane reading beats an implausible one
     for o in out:
         for p in o["prices"]:
             if p and o["code"]:
                 price_support[(o["code"], p)] += 1
-    for o in out:
+    for o, weights in zip(out, wts):
         for p in known_prices.get(o["code"], []):
             price_support[(o["code"], p)] += 2
-        o["price"] = _pick([p for p in o["prices"] if p], {p: price_support[(o["code"], p)] for p in o["prices"] if p}, first)
+        pw = [(p, w) for p, w in zip(o["prices"], weights + [0.5] * len(o["prices"])) if p]  # variants added above weigh little
+        o["price"] = _pick([p for p, _ in pw], [w for _, w in pw], {p: price_support[(o["code"], p)] for p, _ in pw})
+    for o in out:  # a line whose price was unreadable but this product has always cost one price before
+        if o["code"] and not o["price"] and known_prices.get(o["code"]):
+            o["price"] = Counter(known_prices[o["code"]]).most_common(1)[0][0]
     by_code = {}
     for o in out:
         by_code.setdefault(o["code"], []).append(o)
@@ -339,7 +420,6 @@ def combine(rows, total, known_prices=None, known_names=None):
             for k in (1, 2):
                 if fixed_ or len(alts) < k:
                     continue
-                import itertools
                 hits = []
                 for combo in itertools.combinations(alts, k):
                     for choice in itertools.product(*[a for _, a in combo]):
@@ -400,13 +480,13 @@ def read_rows(data):
         rapid, codes, prices = f_rapid.result(), f_codes.result(), f_prices.result()
     out = []
     for i, r in enumerate(prod):
-        readings = [r["text"]] if r["words"] else []
+        readings = [("A", r["text"])] if r["words"] else []
         for k, (j, _) in enumerate(variants):
             if j != i:
                 continue
             if rapid and k < len(rapid):
-                readings.append(rapid[k])
-            readings.append(f"{re.sub(r'[^0-9]', '', codes[k])} {prices[k]}")
+                readings.append(("D", rapid[k]))
+            readings.append(("B", f"{re.sub(r'[^0-9]', '', codes[k])} {prices[k]}"))
         name = re.sub(r"^\W*[0-9§SOolI|]{4,8}\b", "", r["text"])
         name = re.sub(r"\s+\d{1,3}[.,:]?\d{2}\s*[A-Z0-9]{0,3}\b.*$", "", name).strip(" .,:;_~-")
         out.append({"readings": readings, "name": name})
@@ -417,7 +497,9 @@ def read_receipt(data, known_prices=None, known_names=None):
     """Image bytes -> the receipt as plain text, one product per line, repaired and ready to parse."""
     rows, total = read_rows(data)
     items, notes = combine(rows, total, known_prices, known_names)
-    lines = ["%s %s %s %s" % (i["code"], i["name"], i["price"], i["vat"]) for i in items]
+    # every line needs a name the parser can see: borrow the one from earlier receipts, else say it wasn't read
+    lines = ["%s %s %s %s" % (i["code"], i["name"] or (known_names or {}).get(i["code"]) or "UNREAD NAME", i["price"], i["vat"])
+             for i in items]
     if total is not None:
         lines.append(f"Total: GBP{total:.2f}")
     return "\n".join(lines)
