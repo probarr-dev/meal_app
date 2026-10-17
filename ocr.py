@@ -99,7 +99,7 @@ def _words(img):
     with tempfile.NamedTemporaryFile(suffix=".png") as f:
         img.save(f.name)
         out = subprocess.run(["tesseract", f.name, "stdout", "--psm", "6", "-l", "eng", "tsv"],
-                             capture_output=True, text=True, timeout=90).stdout
+                             capture_output=True, text=True, timeout=90, env=dict(os.environ, OMP_THREAD_LIMIT="1")).stdout
     words = []
     for r in csv.DictReader(io.StringIO(out), delimiter="\t", quoting=csv.QUOTE_NONE):
         t = (r.get("text") or "").strip()
@@ -171,7 +171,8 @@ def _stack_ocr(img, boxes, whitelist):
     with tempfile.NamedTemporaryFile(suffix=".png") as f:
         sheet.save(f.name)
         out = subprocess.run(["tesseract", f.name, "stdout", "--psm", "6", "-l", "eng",
-                              "-c", f"tessedit_char_whitelist={whitelist}", "tsv"], capture_output=True, text=True, timeout=120).stdout
+                              "-c", f"tessedit_char_whitelist={whitelist}", "tsv"], capture_output=True, text=True, timeout=120,
+                             env=dict(os.environ, OMP_THREAD_LIMIT="1")).stdout
     slots = [[] for _ in boxes]  # words go back to the slot they sit in, so a missing read can't shift the rest
     for r in csv.DictReader(io.StringIO(out), delimiter="\t", quoting=csv.QUOTE_NONE):
         t = (r.get("text") or "").strip()
@@ -190,19 +191,33 @@ def rapid_available():
     return os.path.exists(RAPID_PY) and os.path.exists(os.path.join(HERE, "ocr_rapid.py"))
 
 
-def _rapid_lines(img, boxes):
-    """One-line crops through RapidOCR, in its own process. [] if it isn't installed or fails."""
+def _rapid_lines(img, boxes, workers=3):
+    """One-line crops through RapidOCR, in a few processes at once (each is single-threaded, so this is the
+    quick way to use several cores). [] if it isn't installed or fails."""
     if not rapid_available():
         return []
     import json
+    n = max(1, min(workers, len(boxes)))
+    chunks = [boxes[i::n] for i in range(n)]  # interleaved, so each process gets a fair mix
     with tempfile.NamedTemporaryFile(suffix=".png") as f:
         img.save(f.name)
-        try:
-            p = subprocess.run([RAPID_PY, os.path.join(HERE, "ocr_rapid.py"), f.name], input=json.dumps(boxes),
-                               capture_output=True, text=True, timeout=240)
-            return [t for t, _ in json.loads(p.stdout)] if p.returncode == 0 else []
-        except Exception:
-            return []
+        env = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
+        procs = [subprocess.Popen([RAPID_PY, os.path.join(HERE, "ocr_rapid.py"), f.name], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env) for _ in chunks]
+        outs = []
+        for p, chunk in zip(procs, chunks):
+            try:
+                out, _ = p.communicate(json.dumps(chunk), timeout=240)
+                outs.append([t for t, _ in json.loads(out)] if p.returncode == 0 else None)
+            except Exception:
+                p.kill()
+                outs.append(None)
+    if any(o is None for o in outs):
+        return []
+    merged = [None] * len(boxes)
+    for k, res in enumerate(outs):
+        merged[k::n] = res
+    return merged
 
 
 def _fields(text):
@@ -372,12 +387,15 @@ def read_rows(data):
     # a row we had to place by the spacing may be a few pixels out, so it is read at three heights
     variants = [(i, dy) for i, r in enumerate(prod) for dy in ((0,) if r["words"] else (-10, 0, 10))]
     boxes = [[0, max(0, prod[i]["y0"] - pad + dy), img.width, min(img.height, prod[i]["y1"] + pad + dy)] for i, dy in variants]
-    rapid = _rapid_lines(img, boxes)
     real = [r for r in prod if r["words"]]
     cx1 = max(r["words"][0]["x"] + r["words"][0]["w"] for r in real) + 14
     px0 = min((([w for w in r["words"] if PRICE_WORD.match(w["t"].replace(" ", ""))] or [r["words"][-1]])[-1]["x"]) for r in real) - 14
-    codes = _stack_ocr(img, [(0, b[1] + 2, cx1, b[3] - 2) for b in boxes], "0123456789")
-    prices = _stack_ocr(img, [(max(0, px0), b[1] + 2, img.width, b[3] - 2) for b in boxes], "0123456789.AB")
+    from concurrent.futures import ThreadPoolExecutor  # the three readers don't wait for each other
+    with ThreadPoolExecutor(3) as pool:
+        f_rapid = pool.submit(_rapid_lines, img, boxes)
+        f_codes = pool.submit(_stack_ocr, img, [(0, b[1] + 2, cx1, b[3] - 2) for b in boxes], "0123456789")
+        f_prices = pool.submit(_stack_ocr, img, [(max(0, px0), b[1] + 2, img.width, b[3] - 2) for b in boxes], "0123456789.AB")
+        rapid, codes, prices = f_rapid.result(), f_codes.result(), f_prices.result()
     out = []
     for i, r in enumerate(prod):
         readings = [r["text"]] if r["words"] else []

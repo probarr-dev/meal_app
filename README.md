@@ -111,7 +111,7 @@ For better accuracy add a second reader, which votes against the first on every 
 
 Each line is read three ways (the whole row, the code and price on their own, and RapidOCR), repeated
 products must agree, earlier receipts and the shop's own prices correct a misread digit, and the lines
-must add up to the printed total. A photo takes about a minute and a half and about 1 GB of memory
+must add up to the printed total. A photo takes about 30 seconds on 4 cores (about a minute and a half on one) and about 1 GB of memory
 while it runs. `tools/receipt_eval.py photo.jpg typed-copy.txt` scores the reader against a typed copy
 of the same receipt.
 
