@@ -81,15 +81,64 @@ def _crop_to_paper(img):
 def _deskew(img):
     """A receipt photographed by hand is a few degrees off, which drifts the rows across the width. Try small
     turns and keep the one where the printed lines come out sharpest (most uneven row-to-row ink)."""
-    small = img.resize((600, max(1, int(img.height * 600 / img.width)))).point(lambda p: 255 if p < 140 else 0)
+    small = img.resize((600, max(1, int(img.height * 600 / img.width))))
+    # only the print counts: a dark table or a shadow is as big as the page, so it vanishes when the local average is taken off
+    small = ImageChops.subtract(small.filter(ImageFilter.GaussianBlur(8)), small).point(lambda p: 255 if p > 22 else 0)
 
     def sharpness(angle):
         prof = list(small.rotate(angle, fillcolor=0).resize((1, small.height), Image.BOX).getdata())
         mean = sum(prof) / len(prof)
         return sum((v - mean) ** 2 for v in prof)
-    best = max((a / 2 for a in range(-12, 13)), key=sharpness)  # -6..6 degrees in half-degree steps
-    best = max((best + d / 10 for d in range(-4, 5)), key=sharpness)
+    best = max((float(a) for a in range(-16, 17)), key=sharpness)  # -16..16 degrees in whole steps
+    best = max((best + d / 4 for d in range(-4, 5)), key=sharpness)
     return img.rotate(best, resample=Image.BICUBIC, expand=True, fillcolor=255) if abs(best) >= 0.2 else img
+
+
+def _trim_sides(img):
+    """After straightening, drop whatever is left and right of the paper when it sits on something dark (a table): the
+    paper is the widest run of bright columns. A pale surface, or no surround at all, is left alone."""
+    small = img.resize((300, max(1, int(img.height * 300 / img.width))))
+    # each column's brightest stretch: print makes a column of paper darker on average, but never in the gaps between lines
+    bands = list(small.resize((300, 40), Image.BOX).getdata())
+    peak = sorted(max(bands[r * 300 + c] for r in range(40)) for c in range(300))
+    if peak[30] > 160 or peak[270] - peak[30] < 60:
+        return img
+    cols = list(small.resize((300, 1), Image.BOX).getdata())
+    ordered = sorted(cols)
+    cut = (ordered[30] + ordered[270]) / 2
+    best, run = (0, 0), None
+    for i, v in enumerate(cols + [0]):
+        if v > cut and run is None:
+            run = i
+        elif v <= cut and run is not None:
+            if i - run > best[1] - best[0]:
+                best = (run, i)
+            run = None
+    x0, x1 = best
+    if x1 - x0 < 100:  # a strip under a third of the picture is not the paper
+        return img
+    scale = img.width / 300
+    return img.crop((max(0, int((x0 - 3) * scale)), 0, min(img.width, int((x1 + 3) * scale)), img.height))
+
+
+def _upright(img):
+    """A receipt photographed sideways or upside down reads as nothing, so turn it the way its text runs. The long way
+    of the image is the long way of the strip, so only two turns are possible; each is tried on a small copy and the
+    one that finds more product codes wins."""
+    wide = img.width > img.height * 1.15
+    turns = (90, 270) if wide else (0, 180)
+    small = img.copy()
+    small.thumbnail((1800, 1800))
+
+    def score(turn):
+        view = small.rotate(turn, expand=True) if turn else small
+        return sum(1 for w in _words(ImageOps.autocontrast(view, cutoff=1)) if re.fullmatch(r"\d{6}", w["t"]))
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as pool:
+        scores = list(pool.map(score, turns))
+    best = turns[0] if scores[0] >= scores[1] else turns[1]
+    return img.rotate(best, expand=True) if best else img
 
 
 def _prepare_both(data):
@@ -97,8 +146,8 @@ def _prepare_both(data):
     the print showing through from the back taken out (the paper's local brightness is subtracted, so only dark ink
     stays). They fail in different places, which is what makes comparing them useful."""
     img = Image.open(io.BytesIO(data))
-    img = ImageOps.exif_transpose(img).convert("L")
-    img = _deskew(_crop_to_paper(img))
+    img = _upright(ImageOps.exif_transpose(img).convert("L"))
+    img = _trim_sides(_deskew(_crop_to_paper(img)))
     target = 1500  # a receipt is narrow: make its text big enough to read
     if img.width < target:
         img = img.resize((target, int(img.height * target / img.width)), Image.LANCZOS)
@@ -267,7 +316,9 @@ def _fields(text):
     """(code, price, vat) as one reader saw them in a line of text; each None if not found."""
     t = text.strip()
     # digits first: a reader that drops the spaces hands us "335812SAUCE...", where S must not become a 5
-    m = re.match(r"^\W*(\d{5,7})", t) or re.match(r"^\W*([0-9§SOolI|]{5,8})\b", t)
+    # a § or | at the front is a smudged digit, so it stays part of the code ("§71731" is 571731, not 71731)
+    m = re.match(r"^[^\w§|]*([0-9§SOolI|]{5,8})\b", t)
+    m = m if m and sum(ch.isdigit() for ch in m.group(1)) >= 4 else (re.match(r"^\W*(\d{5,7})", t) or re.match(r"^\W*([0-9§SOolI|]{5,8})\b", t))
     code = m.group(1).translate(CODE_FIX) if m else None
     tt = t.replace("O", "0")
     nums = PRICE_RE.findall(tt)
@@ -302,6 +353,18 @@ def _pick(cands, weights, support):
     if not scored:
         return None
     return max(scored, key=lambda c: (scored[c] + 0.25 * min(support.get(c, 0), 4), -list(cands).index(c)))
+
+
+def _multiples(prices):
+    """What a multi-buy line holds: a product that costs 1.39 is printed as 2.78 when two are bought."""
+    out = set()
+    for p in prices:
+        try:
+            unit = round(float(p) * 100)
+        except ValueError:
+            continue
+        out.update(f"{unit * k / 100:.2f}" for k in range(1, 7))
+    return out
 
 
 def combine(rows, total, known_prices=None, known_names=None):
@@ -374,7 +437,7 @@ def combine(rows, total, known_prices=None, known_names=None):
             if p and o["code"]:
                 price_support[(o["code"], p)] += 1
     for o, weights in zip(out, wts):
-        for p in known_prices.get(o["code"], []):
+        for p in _multiples(known_prices.get(o["code"], [])):
             price_support[(o["code"], p)] += 2
         pw = [(p, w) for p, w in zip(o["prices"], weights + [0.5] * len(o["prices"])) if p]  # variants added above weigh little
         o["price"] = _pick([p for p, _ in pw], [w for _, w in pw], {p: price_support[(o["code"], p)] for p, _ in pw})
@@ -386,9 +449,10 @@ def combine(rows, total, known_prices=None, known_names=None):
         by_code.setdefault(o["code"], []).append(o)
     for code, group in by_code.items():
         known = Counter(known_prices.get(code, []))
+        multi = _multiples(known)
         # a price read near a price this code always cost before is that price misread (1.99 for 1.09)
         for o in group:
-            if o["price"] and known and o["price"] not in known:
+            if o["price"] and known and o["price"] not in multi:
                 close = [p for p in known if len(p) == len(o["price"]) and sum(a != b for a, b in zip(p, o["price"])) == 1]
                 if len(close) == 1:
                     o["price"] = close[0]
@@ -496,12 +560,16 @@ def read_rows(data):
     pitch = sorted(b - a for a, b in zip(ys, ys[1:]))[len(ys) // 2] if len(ys) > 3 else 0
     if pitch:
         height = sorted(r["y1"] - r["y0"] for r in prod)[len(prod) // 2]
+        # a "2 x 4.29" line above a product is a line of print too, not a gap
+        others = [r["mid"] for r in rows if r not in prod and r["text"].strip()]
         filled = []
         for a, b in zip(prod, prod[1:]):
             filled.append(a)
             gap = (b["y0"] + b["y1"]) / 2 - (a["y0"] + a["y1"]) / 2
             for k in range(1, int(round(gap / pitch))):
                 mid = (a["y0"] + a["y1"]) / 2 + gap * k / round(gap / pitch)
+                if any(abs(m - mid) < pitch * 0.5 for m in others):
+                    continue
                 filled.append({"text": "", "words": [], "y0": int(mid - height / 2), "y1": int(mid + height / 2)})
         filled.append(prod[-1])
         prod = filled
